@@ -1,8 +1,7 @@
-from numpy.random import rand
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 from datetime import datetime, timedelta
 from faker import Faker
 
@@ -149,11 +148,126 @@ class SAPDataGenerator:
     def _generate_mara(self):
         """
         Generate Material Master (MARA).
-
-
         """
-        # TODO: Implementation
-        pass
+
+        total_materials = self.config.num_materials
+        matnr, maktx, mtart, matkl, meins, ersda, brgew, ntgew = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        base_price = []  # hidden column for pricing logic
+
+        matnr = [f"M{i:08d}" for i in range(1, total_materials + 1)]
+
+        categories = {
+            "ELECT": {  # Electronics
+                "price_range": (100, 10000),
+                "uom_options": ["PC", "EA"],
+                "weight_range": (0.5, 20.0),  # kg
+                "mat_type": "FERT",  # Finished Goods
+            },
+            "OFFICE": {  # Office Supplies
+                "price_range": (1, 500),
+                "uom_options": ["EA", "BOX", "PAK"],
+                "weight_range": (0.1, 5.0),
+                "mat_type": "HAWA",  # Trading Goods
+            },
+            "RAW": {  # Raw Materials
+                "price_range": (50, 5000),
+                "uom_options": ["KG", "L", "M", "TON"],
+                "weight_range": (10.0, 1000.0),
+                "mat_type": "ROH",  # Raw Materials
+            },
+            "SERV": {  # Services
+                "price_range": (500, 50000),
+                "uom_options": ["AU", "HR", "DAY"],  # Activity Unit, Hour, Day
+                "weight_range": (0, 0),  # Intangible
+                "mat_type": "DIEN",  # Services
+            },
+        }
+
+        counts = {
+            "ELECT": int(total_materials * 0.35),
+            "OFFICE": int(total_materials * 0.30),
+            "RAW": int(total_materials * 0.25),
+            "SERV": total_materials
+            - int(
+                total_materials * 0.9
+            ),  # subtracted to ensure rounding errors don't leave unaccounted materials
+        }
+
+        for category, count in counts.items():
+            # hidden column for price anchoring
+            batch_prices = np.exp(
+                np.random.uniform(
+                    np.log(categories[category]["price_range"][0]),
+                    np.log(categories[category]["price_range"][1]),
+                    count,
+                )
+            )
+
+            # weight
+            if category == "SERV":
+                batch_brgew = np.zeros(count)
+                batch_ntgew = np.zeros(count)
+            else:
+                batch_brgew = np.random.uniform(
+                    categories[category]["weight_range"][0],
+                    categories[category]["weight_range"][1],
+                    count,
+                )
+                batch_ntgew = batch_brgew * np.random.uniform(0.8, 0.99, count)
+
+            # units
+            batch_meins = np.random.choice(categories[category]["uom_options"], count)
+
+            # desc
+            batch_maktx = [f"{category} - {fake.bs()}" for _ in range(count)]
+
+            # creation date, <=start of simulation
+            sim_start = datetime.strptime(self.config.start_date, "%Y-%m-%d")
+            ersda_end = sim_start - timedelta(days=1)
+            ersda_start = sim_start - timedelta(days=365 * 10)
+            ersda_range = (ersda_end - ersda_start).days
+            batch_ersda = [
+                ersda_start + timedelta(days=int(np.random.random() * ersda_range))
+                for _ in range(count)
+            ]
+
+            # assemble the df for the category - extend all lists
+            matkl.extend([category] * count)
+            mtart.extend([categories[category]["mat_type"]] * count)
+            base_price.extend(batch_prices.tolist())
+            meins.extend(batch_meins.tolist())
+            maktx.extend(batch_maktx)
+            ersda.extend(batch_ersda)
+            brgew.extend(batch_brgew.tolist())
+            ntgew.extend(batch_ntgew.tolist())
+
+        # create df and shuffle
+        self.mara = pd.DataFrame(
+            {
+                "MATNR": matnr,
+                "MAKTX": maktx,
+                "MTART": mtart,
+                "MATKL": matkl,
+                "MEINS": meins,
+                "ERSDA": ersda,
+                "BRGEW": brgew,
+                "NTGEW": ntgew,
+                "base_price": base_price,
+            }
+        )
+
+        self.mara = self.mara.sample(frac=1, random_state=self.config.seed).reset_index(
+            drop=True
+        )
 
     def _generate_contracts(self):
         """
