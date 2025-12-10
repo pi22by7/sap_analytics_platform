@@ -1,11 +1,17 @@
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional
-from datetime import datetime, timedelta
+from typing import Optional, TypedDict, List, Tuple
 from faker import Faker
 
 fake = Faker()
+
+
+class CategoryConfig(TypedDict):
+    price_range: Tuple[int, int]
+    uom_options: List[str]
+    weight_range: Tuple[float, float]
+    mat_type: str
 
 
 @dataclass
@@ -20,6 +26,7 @@ class GeneratorConfig:
     num_vendors: int = 1000
     num_materials: int = 5000
     num_pos: int = 10000
+    num_contracts: int = 2000000
 
     # Business Logic parameters
     pareto_split: float = 0.20  # 20% vendors
@@ -64,69 +71,47 @@ class SAPDataGenerator:
     def _generate_lfa1(self):
         """
         Generate Vendor Master (LFA1).
-        Refer to plan.md for logic details during dev (update this docstring later).
+        Vectorized implementation - no loops except for Faker generation.
         """
+        n = self.config.num_vendors
+        num_top = int(n * self.config.pareto_split)
 
-        total_vendors = self.config.num_vendors
-        lifnr, name1, land1, ort01, ktokk, erdat, stras, telf1, smtp_addr, sperr = (
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
-        perf_bias, spend_weight = [], []
+        # IDs
+        lifnr = np.array([f"V{i:07d}" for i in range(1, n + 1)])
 
-        lifnr = [f"V{i:07d}" for i in range(1, total_vendors + 1)]
+        # Pareto weights: top 20% get weight=100, rest get 1
+        spend_weight = np.where(np.arange(n) < num_top, 100, 1)
 
-        num_top_vendors = total_vendors * self.config.pareto_split
-
-        for i in range(self.config.num_vendors):
-            if i < num_top_vendors:
-                spend_weight.append(100)
-            else:
-                spend_weight.append(1)
-
-        random_probs = np.random.random(total_vendors)
-        for i, prob in enumerate(random_probs):
-            threshold = (
-                0.40 if spend_weight[i] == 100 else 0.05
-            )  # this will ensure ~12% of PREF vendors
-            if prob < threshold:
-                ktokk.append("PREF")
-            else:
-                ktokk.append("STD")
-
-        random_probs_2 = np.random.random(total_vendors)
-        for prob2 in random_probs_2:
-            if prob2 < 0.05:
-                sperr.append("X")
-            else:
-                sperr.append("")
-
-        perf_bias = np.random.normal(0, 2.0, total_vendors)
-
-        name1 = [fake.company() for _ in range(total_vendors)]
-        land1 = [fake.country_code() for _ in range(total_vendors)]
-        ort01 = [fake.city() for _ in range(total_vendors)]
-        stras = [fake.street_address() for _ in range(total_vendors)]
-        telf1 = [fake.phone_number() for _ in range(total_vendors)]
-        smtp_addr = [fake.company_email() for _ in range(total_vendors)]
-
-        sim_start = datetime.strptime(self.config.start_date, "%Y-%m-%d")
-        erdat_end = sim_start - timedelta(days=1)
-        erdat_start = sim_start - timedelta(days=365 * 10)
-
-        erdat_range = (erdat_end - erdat_start).days
-        erdat = [
-            erdat_start + timedelta(days=int(np.random.random() * erdat_range))
-            for _ in range(total_vendors)
+        # KTOKK: vectorized conditional logic
+        # Top vendors: 40% chance PREF, Others: 5% chance PREF
+        probs = np.random.random(n)
+        conditions = [
+            (probs < 0.40) & (spend_weight == 100),  # Top vendors, lucky
+            (probs < 0.05) & (spend_weight == 1),  # Bottom vendors, lucky
         ]
+        ktokk = np.select(conditions, ["PREF", "PREF"], default="STD")
+
+        # SPERR: 5% blocked
+        sperr = np.where(np.random.random(n) < 0.05, "X", "")
+
+        # Performance bias
+        perf_bias = np.random.normal(0, 2.0, n)
+
+        # Faker fields (still need list comprehension for external library)
+        name1 = np.array([fake.company() for _ in range(n)])
+        land1 = np.array([fake.country_code() for _ in range(n)])
+        ort01 = np.array([fake.city() for _ in range(n)])
+        stras = np.array([fake.street_address() for _ in range(n)])
+        telf1 = np.array([fake.phone_number() for _ in range(n)])
+        smtp_addr = np.array([fake.company_email() for _ in range(n)])
+
+        # Dates: pandas native
+        sim_start = pd.Timestamp(self.config.start_date)
+        erdat_end = sim_start - pd.Timedelta(days=1)
+        erdat_start = sim_start - pd.Timedelta(days=365 * 10)
+        erdat = pd.to_datetime(
+            np.random.choice(pd.date_range(erdat_start, erdat_end), size=n)
+        )
 
         self.lfa1 = pd.DataFrame(
             {
@@ -151,21 +136,17 @@ class SAPDataGenerator:
         """
 
         total_materials = self.config.num_materials
-        matnr, maktx, mtart, matkl, meins, ersda, brgew, ntgew = (
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
-        base_price = []  # hidden column for pricing logic
+        matnr: List[str] = [f"M{i:08d}" for i in range(1, total_materials + 1)]
+        maktx: List[str] = []
+        mtart: List[str] = []
+        matkl: List[str] = []
+        meins: List[str] = []
+        ersda: List[pd.Timestamp] = []
+        brgew: List[float] = []
+        ntgew: List[float] = []
+        base_price: List[float] = []
 
-        matnr = [f"M{i:08d}" for i in range(1, total_materials + 1)]
-
-        categories = {
+        categories: dict[str, CategoryConfig] = {
             "ELECT": {  # Electronics
                 "price_range": (100, 10000),
                 "uom_options": ["PC", "EA"],
@@ -230,13 +211,13 @@ class SAPDataGenerator:
             # desc
             batch_maktx = [f"{category} - {fake.bs()}" for _ in range(count)]
 
-            # creation date, <=start of simulation
-            sim_start = datetime.strptime(self.config.start_date, "%Y-%m-%d")
-            ersda_end = sim_start - timedelta(days=1)
-            ersda_start = sim_start - timedelta(days=365 * 10)
+            # creation date, <=start of simulation, using pandas Timestamp
+            sim_start = pd.Timestamp(self.config.start_date)
+            ersda_end = sim_start - pd.Timedelta(days=1)
+            ersda_start = sim_start - pd.Timedelta(days=365 * 10)
             ersda_range = (ersda_end - ersda_start).days
             batch_ersda = [
-                ersda_start + timedelta(days=int(np.random.random() * ersda_range))
+                ersda_start + pd.Timedelta(days=int(np.random.random() * ersda_range))
                 for _ in range(count)
             ]
 
@@ -272,11 +253,65 @@ class SAPDataGenerator:
     def _generate_contracts(self):
         """
         Generate Vendor Contracts (Custom Table).
-
-
         """
-        # TODO: Implementation
-        pass
+        assert self.lfa1 is not None, "LFA1 must be generated before contracts"
+        assert self.mara is not None, "MARA must be generated before contracts"
+
+        target = self.config.num_contracts
+
+        # select vendors weighted by spend
+        spend_weights = self.lfa1["spend_weight"].to_numpy()
+        p_weights = spend_weights / spend_weights.sum()
+        sel_vendors = np.random.choice(
+            self.lfa1["LIFNR"].to_numpy(), size=target, replace=True, p=p_weights
+        )
+
+        # select materials randomly
+        sel_materials = np.random.choice(
+            self.mara["MATNR"].to_numpy(), size=target, replace=True
+        )
+
+        # temp df for deduplication and price lookup
+        temp_df = pd.DataFrame({"LIFNR": sel_vendors, "MATNR": sel_materials})
+        temp_df = temp_df.drop_duplicates(subset=["LIFNR", "MATNR"]).reset_index(
+            drop=True
+        )
+        mara_prices = self.mara[["MATNR", "base_price"]].copy()
+        temp_df = temp_df.merge(mara_prices, on="MATNR", how="left")
+        n = len(temp_df)
+
+        contract_id = np.array([f"C{i:09d}" for i in range(1, n + 1)])
+        base_prices = temp_df["base_price"].to_numpy(dtype=np.float64)
+        contract_price = base_prices * np.random.uniform(0.85, 0.95, n)
+
+        # dates
+        sim_start = pd.Timestamp(self.config.start_date)
+        sim_end = pd.Timestamp(self.config.end_date)
+        valid_from_end = sim_end - pd.Timedelta(days=180)  # 6 month runway
+        valid_from = pd.to_datetime(
+            np.random.choice(pd.date_range(sim_start, valid_from_end), size=n)
+        )
+        duration_days = np.random.randint(180, 1095, n)
+        valid_to = valid_from + pd.to_timedelta(duration_days, unit="D")  # type: ignore[arg-type]
+
+        contract_type = np.random.choice(
+            ["BLANKET", "SPOT", "FRAMEWORK"], size=n, p=[0.5, 0.4, 0.1]
+        )
+        volume_commitment = np.random.randint(100, 10000, n)
+
+        # assemble final df at once
+        self.contracts = pd.DataFrame(
+            {
+                "CONTRACT_ID": contract_id,
+                "LIFNR": temp_df["LIFNR"].values,
+                "MATNR": temp_df["MATNR"].values,
+                "CONTRACT_PRICE": contract_price,
+                "VALID_FROM": valid_from,
+                "VALID_TO": valid_to,
+                "VOLUME_COMMITMENT": volume_commitment,
+                "CONTRACT_TYPE": contract_type,
+            }
+        )
 
     def _generate_ekko(self):
         """
