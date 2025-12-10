@@ -1,0 +1,10 @@
+# core
+pandas
+numpy
+Faker
+
+# dashborad
+streamlit
+
+# testing
+pytest
