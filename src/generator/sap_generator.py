@@ -119,11 +119,13 @@ class SAPDataGenerator:
         telf1 = [fake.phone_number() for _ in range(total_vendors)]
         smtp_addr = [fake.company_email() for _ in range(total_vendors)]
 
-        start_date = datetime.strptime(self.config.start_date, "%Y-%m-%d")
-        end_date = datetime.strptime(self.config.end_date, "%Y-%m-%d")
-        date_range = (end_date - start_date).days
+        sim_start = datetime.strptime(self.config.start_date, "%Y-%m-%d")
+        erdat_end = sim_start - timedelta(days=1)
+        erdat_start = sim_start - timedelta(days=365 * 10)
+
+        erdat_range = (erdat_end - erdat_start).days
         erdat = [
-            start_date + timedelta(days=int(np.random.random() * date_range))
+            erdat_start + timedelta(days=int(np.random.random() * erdat_range))
             for _ in range(total_vendors)
         ]
 
