@@ -8,3 +8,13 @@ streamlit
 
 # testing
 pytest
+
+# code quality
+black
+flake8
+isort
+
+# data 
+pyarrow
+fastparquet
+

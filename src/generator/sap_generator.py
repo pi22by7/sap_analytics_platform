@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
+from numpy.typing import NDArray
 from dataclasses import dataclass
-from typing import Optional, TypedDict, List, Tuple
+from typing import Optional, TypedDict, List, Tuple, Any, cast
 from faker import Faker
 
 fake = Faker()
@@ -31,8 +32,10 @@ class GeneratorConfig:
     # Business Logic parameters
     pareto_split: float = 0.20  # 20% vendors
     pareto_spend_share: float = 0.80  # 80% spend
-    contract_coverage: float = 0.45  # % of vendor-material pairs with contracts
-    large_order_prob: float = 0.05  # Probability of a 'large' order (>50k)
+    # % of vendor-material pairs with contracts
+    contract_coverage: float = 0.45
+    # Probability of a 'large' order (>50k)
+    large_order_prob: float = 0.05
 
 
 class SAPDataGenerator:
@@ -137,7 +140,8 @@ class SAPDataGenerator:
         """
         Generate Material Master (MARA).
         weight range and uom depend on material category for realism.
-        currently hardcoded distribution of categories. Can be extended to config later.
+        currently hardcoded distribution of categories.
+        Can be extended to config later.
         """
 
         total_materials = self.config.num_materials
@@ -156,19 +160,22 @@ class SAPDataGenerator:
                 "price_range": (100, 10000),
                 "uom_options": ["PC", "EA"],
                 "weight_range": (0.5, 20.0),  # kg
-                "mat_type": "FERT",  # Finished Goods
+                # Finished Goods
+                "mat_type": "FERT",
             },
             "OFFICE": {  # Office Supplies
                 "price_range": (1, 500),
                 "uom_options": ["EA", "BOX", "PAK"],
                 "weight_range": (0.1, 5.0),
-                "mat_type": "HAWA",  # Trading Goods
+                # Trading Goods
+                "mat_type": "HAWA",
             },
             "RAW": {  # Raw Materials
                 "price_range": (50, 5000),
                 "uom_options": ["KG", "L", "M", "TON"],
                 "weight_range": (10.0, 1000.0),
-                "mat_type": "ROH",  # Raw Materials
+                # Raw Materials
+                "mat_type": "ROH",
             },
             "SERV": {  # Services
                 "price_range": (500, 50000),
@@ -182,10 +189,9 @@ class SAPDataGenerator:
             "ELECT": int(total_materials * 0.35),
             "OFFICE": int(total_materials * 0.30),
             "RAW": int(total_materials * 0.25),
-            "SERV": total_materials
-            - int(
-                total_materials * 0.9
-            ),  # subtracted to ensure rounding errors don't leave unaccounted materials
+            # subtracted to ensure rounding errors don't leave
+            # unaccounted materials
+            "SERV": total_materials - int(total_materials * 0.9),
         }
 
         for category, count in counts.items():
@@ -211,7 +217,8 @@ class SAPDataGenerator:
                 batch_ntgew = batch_brgew * np.random.uniform(0.8, 0.99, count)
 
             # units
-            batch_meins = np.random.choice(categories[category]["uom_options"], count)
+            uom_opts = categories[category]["uom_options"]
+            batch_meins = np.random.choice(uom_opts, count)
 
             # desc
             batch_maktx = [f"{category} - {fake.bs()}" for _ in range(count)]
@@ -258,7 +265,8 @@ class SAPDataGenerator:
     def _generate_contracts(self):
         """
         Generate Vendor Contracts (Custom Table).
-        discrepancy in requirements doc, 2k minimum, but 40% of 5k*1k=2M, so function is designed to handle generation of very large data.
+        discrepancy in requirements doc, 2k minimum, but 40% of 5k*1k=2M,
+        so function is designed to handle generation of very large data.
         """
         assert self.lfa1 is not None, "LFA1 must be generated before contracts"
         assert self.mara is not None, "MARA must be generated before contracts"
@@ -272,7 +280,10 @@ class SAPDataGenerator:
         spend_weights = self.lfa1["spend_weight"].to_numpy()
         p_weights = spend_weights / spend_weights.sum()
         sel_vendors = np.random.choice(
-            self.lfa1["LIFNR"].to_numpy(), size=target_draws, replace=True, p=p_weights
+            a=self.lfa1["LIFNR"].to_numpy(),
+            size=target_draws,
+            replace=True,
+            p=p_weights,
         )
 
         # select materials randomly
@@ -285,7 +296,7 @@ class SAPDataGenerator:
         temp_df = temp_df.drop_duplicates(subset=["LIFNR", "MATNR"]).reset_index(
             drop=True
         )
-        # Take exactly target rows after deduplication
+        # take exactly target rows after deduplication
         temp_df = temp_df.head(target)
         mara_prices = self.mara[["MATNR", "base_price"]].copy()
         temp_df = temp_df.merge(mara_prices, on="MATNR", how="left")
@@ -298,11 +309,12 @@ class SAPDataGenerator:
         # dates
         sim_start = pd.Timestamp(self.config.start_date)
         sim_end = pd.Timestamp(self.config.end_date)
-        valid_from_end = sim_end - pd.Timedelta(days=90)  # 3 month runway
+        # 3 month runway
+        valid_from_end = sim_end - pd.Timedelta(days=90)
         valid_from = pd.to_datetime(
             np.random.choice(pd.date_range(sim_start, valid_from_end), size=n)
         )
-        duration_days = np.random.randint(365, 1095, n)
+        duration_days: NDArray[np.int_] = np.random.randint(365, 1095, n)
         valid_to = valid_from + pd.to_timedelta(duration_days, unit="D")
 
         contract_type = np.random.choice(
@@ -334,8 +346,10 @@ class SAPDataGenerator:
 
         date_range = pd.date_range(self.config.start_date, self.config.end_date)
 
-        # Q4 should have more weight for year-end spending
-        date_weights = np.where(date_range.month.isin([10, 11, 12]), 1.3, 1.0)
+        # Q4 weighted higher for year-end spend
+        date_weights: NDArray[np.float64] = np.where(
+            date_range.month.isin([10, 11, 12]), 1.3, 1.0
+        )
         date_weights = date_weights / date_weights.sum()
 
         # po dates
@@ -369,9 +383,11 @@ class SAPDataGenerator:
             days_range = (
                 pd.DatetimeIndex([cutoff_date] * len(erdat_vals)) - erdat_vals
             ).days.to_numpy()
-            # Vectorized: random fraction of days_range
+
             random_fractions = np.random.random(len(days_range))
-            random_offsets = (random_fractions * np.maximum(days_range, 0)).astype(int)
+            random_offsets: NDArray[np.int_] = (
+                random_fractions * np.maximum(days_range, 0)
+            ).astype(int)
             aedat[shiftable_mask] = (
                 erdat_vals + pd.to_timedelta(random_offsets, unit="D")
             ).to_numpy()
@@ -384,21 +400,23 @@ class SAPDataGenerator:
         is_large = np.random.random(n) < self.config.large_order_prob
 
         nb_prob = np.where(
-            is_large, np.random.uniform(0.8, 0.95, n), np.random.uniform(0.6, 0.8, n)
+            is_large,
+            np.random.uniform(0.8, 0.95, n),
+            np.random.uniform(0.6, 0.8, n),
         )
         bsart = np.where(np.random.random(n) < nb_prob, "NB", "FO")
 
         ebeln = np.array([f"PO{i:010d}" for i in range(1, n + 1)])
 
-        bukrs = np.random.choice(["1000", "2000", "3000"], size=n)  # company codes
-        waers = np.random.choice(
-            ["USD", "EUR", "GBP"], size=n, p=[0.6, 0.3, 0.1]
-        )  # Currencies
-        ekorg = np.random.choice(["ORG1", "ORG2", "ORG3"], size=n)  # purchasing orgs
-        ekgrp = np.random.choice(
-            ["GRP1", "GRP2", "GRP3", "GRP4"], size=n
-        )  # purchasing groups
-        bedat = aedat  # Document date = PO date for simplicity
+        # company codes
+        bukrs = np.random.choice(["1000", "2000", "3000"], size=n)
+        # Currencies
+        waers = np.random.choice(["USD", "EUR", "GBP"], size=n, p=[0.6, 0.3, 0.1])
+        # purchasing orgs
+        ekorg = np.random.choice(["ORG1", "ORG2", "ORG3"], size=n)
+        # purchasing groups
+        ekgrp = np.random.choice(["GRP1", "GRP2", "GRP3", "GRP4"], size=n)
+        bedat = aedat  # document date = PO date
 
         self.ekko = pd.DataFrame(
             {
@@ -418,24 +436,279 @@ class SAPDataGenerator:
     def _generate_ekpo(self):
         """
         Generate PO Line Items (EKPO).
-
         """
-        # TODO: Implementation
-        pass
+        assert self.ekko is not None
+        assert self.mara is not None
+        assert self.contracts is not None
+        num_headers = self.config.num_pos
+
+        mu, sigma = 1.2, 0.5
+        item_counts = np.random.lognormal(mu, sigma, num_headers).astype(int)
+        item_counts = np.clip(item_counts, 1, 15)  # limit to 15 items max
+        total_items = item_counts.sum()
+
+        items_df = pd.DataFrame(
+            {
+                "EBELN": np.repeat(self.ekko["EBELN"].to_numpy(), item_counts),
+                "LIFNR": np.repeat(self.ekko["LIFNR"].to_numpy(), item_counts),
+                "BSART": np.repeat(self.ekko["BSART"].to_numpy(), item_counts),
+                "AEDAT": np.repeat(self.ekko["AEDAT"].to_numpy(), item_counts),
+                "is_large": np.repeat(self.ekko["is_large"].to_numpy(), item_counts),
+            }
+        )
+
+        items_df["EBELP"] = (items_df.groupby("EBELN").cumcount() + 1) * 10
+
+        # material assignment
+        items_df["MATNR"] = None
+
+        spot_mask = items_df["BSART"] == "FO"
+        n_spot = spot_mask.sum()
+
+        items_df.loc[spot_mask, "MATNR"] = np.random.choice(
+            self.mara["MATNR"].to_numpy(), size=n_spot
+        )
+
+        nb_mask = items_df["BSART"] == "NB"
+        nb_rows = items_df[nb_mask].copy()
+
+        rel_lifnrs = nb_rows["LIFNR"].unique()
+        contracts_df = self.contracts
+        valid_contracts = contracts_df[contracts_df["LIFNR"].isin(rel_lifnrs)]
+
+        nb_rows = nb_rows.sort_values("AEDAT")
+        valid_contracts = valid_contracts.sort_values("VALID_FROM")
+
+        # prospective = nb_rows.merge(
+        #     valid_contracts[["LIFNR", "MATNR", "CONTRACT_PRICE"]],
+        #     on="LIFNR",
+        #     how="left",
+        # ) # This crashed
+
+        selected = pd.merge_asof(
+            nb_rows,
+            valid_contracts[
+                [
+                    "LIFNR",
+                    "MATNR",
+                    "CONTRACT_PRICE",
+                    "VALID_FROM",
+                    "VALID_TO",
+                ]
+            ],
+            left_on="AEDAT",
+            right_on="VALID_FROM",
+            by="LIFNR",
+            direction="backward",
+        )
+
+        valid_mask = selected["AEDAT"] <= selected["VALID_TO"]
+        selected = selected.loc[valid_mask].copy()
+
+        # ipdate matched rows using index alignment
+        if len(selected) > 0 and "MATNR" in selected.columns:
+            items_df.loc[selected.index, "MATNR"] = selected["MATNR"]
+            items_df.loc[selected.index, "CONTRACT_PRICE"] = selected["CONTRACT_PRICE"]
+
+        left_nans = items_df["MATNR"].isna()
+        items_df.loc[left_nans, "MATNR"] = np.random.choice(
+            self.mara["MATNR"].to_numpy(), size=left_nans.sum()
+        )
+
+        # price
+        items_df = items_df.merge(
+            self.mara[["MATNR", "base_price"]],
+            on="MATNR",
+            how="left",
+        )
+
+        # Add price noise for spot items
+        noise: NDArray[np.float64] = np.random.normal(1.0, 0.15, total_items)
+        spot_price: pd.Series[Any] = items_df["base_price"] * noise
+
+        if "CONTRACT_PRICE" in items_df.columns:
+            items_df["NETPR"] = np.where(
+                items_df["CONTRACT_PRICE"].notna(),
+                items_df["CONTRACT_PRICE"],
+                spot_price,
+            )
+        else:
+            items_df["NETPR"] = spot_price
+
+        # quantity
+        menge_vals: NDArray[np.float64] = np.random.lognormal(1.3, 0.6, total_items)
+        items_df["MENGE"] = menge_vals.astype(int)
+
+        # large order management
+        large_mask = items_df["is_large"]
+        num_large = large_mask.sum()
+
+        if num_large > 0:
+            target_val: NDArray[np.float64] = np.random.uniform(
+                15000, 50000, size=num_large
+            )
+
+            netpr_large = items_df.loc[large_mask, "NETPR"]
+
+            qty_forced: NDArray[np.int_] = (target_val / netpr_large).astype(int)
+
+            # only  large rows to keep the higher value
+            items_df.loc[large_mask, "MENGE"] = np.maximum(
+                items_df.loc[large_mask, "MENGE"], qty_forced
+            )
+
+        items_df["NETWR"] = items_df["MENGE"] * items_df["NETPR"]
+
+        lead_time_days: NDArray[np.int_] = np.random.randint(5, 30, size=len(items_df))
+        items_df["EINDT"] = items_df["AEDAT"] + cast(
+            Any, pd.to_timedelta(lead_time_days, unit="D")
+        )
+
+        self.ekpo = items_df[
+            [
+                "EBELN",
+                "EBELP",
+                "MATNR",
+                "MENGE",
+                "NETPR",
+                "NETWR",
+                "EINDT",
+            ]
+        ]
 
     def _generate_ekbe(self):
         """
         Generate PO History (EKBE).
-
         """
-        # TODO: Implementation
-        pass
+        assert self.ekpo is not None
+        assert self.ekko is not None
+        assert self.lfa1 is not None
+
+        base_df = self.ekpo.merge(
+            self.ekko[["EBELN", "LIFNR", "AEDAT"]],
+            on="EBELN",
+            how="left",
+        )
+
+        base_df = base_df.merge(
+            self.lfa1[["LIFNR", "perf_bias"]],
+            on="LIFNR",
+            how="left",
+        )
+
+        gr_df = base_df.copy()
+        gr_df["BEWTP"] = "E"
+
+        noise = np.random.normal(1.5, 2.0, len(gr_df))
+
+        total_delay = (gr_df["perf_bias"] + noise).astype(int)
+
+        gr_df["BUDAT"] = gr_df["EINDT"] + cast(
+            Any, pd.to_timedelta(total_delay, unit="D")  # type: ignore[reportUnknownMemberType]
+        )
+
+        early_mask = gr_df["BUDAT"] < gr_df["AEDAT"]
+        gr_df.loc[early_mask, "BUDAT"] = gr_df.loc[early_mask, "AEDAT"] + cast(
+            Any,
+            pd.to_timedelta(np.random.randint(0, 2, size=early_mask.sum()), unit="D"),
+        )
+
+        gr_df.rename(columns={"NETWR": "DMBTR"}, inplace=True)
+
+        has_invoice = np.random.random(len(gr_df)) < 0.95
+        ir_df = gr_df[has_invoice].copy()
+        ir_df["BEWTP"] = "Q"
+
+        processing_time = np.random.randint(5, 30, size=len(ir_df))
+        ir_df["BUDAT"] = ir_df["BUDAT"] + cast(
+            Any, pd.to_timedelta(processing_time, unit="D")  # type: ignore[reportUnknownMemberType]
+        )
+
+        price_noise = np.random.normal(1.0, 0.02, len(ir_df))
+        ir_df["DMBTR"] = ir_df["DMBTR"] * price_noise
+        ir_df["DMBTR"] = ir_df["DMBTR"].round(2)
+
+        self.ekbe = pd.concat([gr_df, ir_df], ignore_index=True)[
+            ["EBELN", "EBELP", "BEWTP", "BUDAT", "MENGE", "DMBTR"]
+        ]
+
+        self.ekbe = self.ekbe.sort_values(by=["EBELN", "EBELP", "BUDAT"]).reset_index(
+            drop=True
+        )
+
+        self.ekbe["BELNR"] = np.array(
+            [f"5{i:09d}" for i in range(1, len(self.ekbe) + 1)]
+        )
+
+        self.ekbe = self.ekbe[
+            ["EBELN", "EBELP", "BEWTP", "BUDAT", "MENGE", "DMBTR", "BELNR"]
+        ].reset_index(drop=True)
 
     def _cleanup_hidden_columns(self):
-        """Drop internal helper columns (weights, base_price, bias) before saving."""
-        # TODO: Drop 'spend_weight', 'perf_bias', 'base_price', 'is_large'
-        pass
+        """
+        Drop internal helper columns (weights, base_price, bias)
+        before saving.
+        """
+        # Clean LFA1
+        if self.lfa1 is not None:
+            cols_to_drop = ["spend_weight", "perf_bias"]
+            existing = [c for c in cols_to_drop if c in self.lfa1.columns]
+            if existing:
+                self.lfa1.drop(columns=existing, inplace=True)
+
+        # Clean MARA
+        if self.mara is not None:
+            cols_to_drop = ["base_price"]
+            existing = [c for c in cols_to_drop if c in self.mara.columns]
+            if existing:
+                self.mara.drop(columns=existing, inplace=True)
+
+        # Clean EKKO
+        if self.ekko is not None:
+            cols_to_drop = ["is_large"]
+            existing = [c for c in cols_to_drop if c in self.ekko.columns]
+            if existing:
+                self.ekko.drop(columns=existing, inplace=True)
 
     def save_to_parquet(self, output_dir: str):
         """Save all dataframes to Parquet."""
-        pass
+        import os
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        data_map = {
+            "LFA1": self.lfa1,
+            "MARA": self.mara,
+            "VENDOR_CONTRACTS": self.contracts,
+            "EKKO": self.ekko,
+            "EKPO": self.ekpo,
+            "EKBE": self.ekbe,
+        }
+
+        print(f"\nSaving data to '{output_dir}/'...")
+
+        for name, df in data_map.items():
+            if df is not None and not df.empty:
+                file_path = os.path.join(output_dir, f"{name}.parquet")
+                df.to_parquet(file_path, index=False)
+                print(f"✓ {name}: Saved {len(df):,} rows")
+            else:
+                print(f"⚠ {name}: Dataframe is empty or None, skipping.")
+
+
+if __name__ == "__main__":
+    # config
+    config = GeneratorConfig(
+        seed=42,
+        num_vendors=1000,
+        num_materials=5000,
+        num_pos=10000,  # 10k Headers -> ~40k Items -> ~60k History
+        num_contracts=2000000,  # 2k Contracts
+    )
+
+    generator = SAPDataGenerator(config)
+    generator.generate_all()
+
+    generator.save_to_parquet("data")
+
+    print("\nGeneration Complete.")
