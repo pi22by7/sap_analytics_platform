@@ -76,13 +76,6 @@ class SAPDataGenerator:
         n = self.config.num_vendors
         num_top = int(n * self.config.pareto_split)
 
-        # IDs
-        lifnr = np.array([f"V{i:07d}" for i in range(1, n + 1)])
-
-        # shuffle to randomize which vendors become top-tier (this prevents early IDs always being top)
-        shuffle_idx = np.random.permutation(n)
-        lifnr = lifnr[shuffle_idx]  # comment this out for deterministic top vendors
-
         # pareto weights: top 20% get weight=100, rest get 1
         spend_weight = np.where(np.arange(n) < num_top, 100, 1)
 
@@ -117,21 +110,27 @@ class SAPDataGenerator:
             np.random.choice(pd.date_range(erdat_start, erdat_end), size=n)
         )
 
-        self.lfa1 = pd.DataFrame(
-            {
-                "LIFNR": lifnr,
-                "NAME1": name1,
-                "LAND1": land1,
-                "ORT01": ort01,
-                "STRAS": stras,
-                "TELF1": telf1,
-                "SMTP_ADDR": smtp_addr,
-                "KTOKK": ktokk,
-                "SPERR": sperr,
-                "ERDAT": erdat,
-                "spend_weight": spend_weight,
-                "perf_bias": perf_bias,
-            }
+        lifnr = np.array([f"V{i:07d}" for i in range(1, n + 1)])
+
+        self.lfa1 = (
+            pd.DataFrame(
+                {
+                    "LIFNR": lifnr,
+                    "NAME1": name1,
+                    "LAND1": land1,
+                    "ORT01": ort01,
+                    "STRAS": stras,
+                    "TELF1": telf1,
+                    "SMTP_ADDR": smtp_addr,
+                    "KTOKK": ktokk,
+                    "SPERR": sperr,
+                    "ERDAT": erdat,
+                    "spend_weight": spend_weight,
+                    "perf_bias": perf_bias,
+                }
+            )
+            .sample(frac=1, random_state=self.config.seed)
+            .reset_index(drop=True)
         )
 
     def _generate_mara(self):
@@ -324,6 +323,9 @@ class SAPDataGenerator:
         """
         Generate PO Headers (EKKO).
         """
+        n = self.config.num_pos
+
+        elbeln = [f"PO{i:010d}" for i in range(1, n + 1)]
 
     def _generate_ekpo(self):
         """
