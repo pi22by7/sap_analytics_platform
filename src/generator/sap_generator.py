@@ -32,7 +32,7 @@ class GeneratorConfig:
     pareto_split: float = 0.20  # 20% vendors
     pareto_spend_share: float = 0.80  # 80% spend
     contract_coverage: float = 0.45  # % of vendor-material pairs with contracts
-    whale_order_prob: float = 0.05  # Probability of a 'Whale' order (>50k)
+    large_order_prob: float = 0.05  # Probability of a 'large' order (>50k)
 
 
 class SAPDataGenerator:
@@ -265,16 +265,19 @@ class SAPDataGenerator:
 
         target = self.config.num_contracts
 
+        # oversample to compensate for deduplication losses
+        target_draws = int(target * 1.5)
+
         # select vendors weighted by spend
         spend_weights = self.lfa1["spend_weight"].to_numpy()
         p_weights = spend_weights / spend_weights.sum()
         sel_vendors = np.random.choice(
-            self.lfa1["LIFNR"].to_numpy(), size=target, replace=True, p=p_weights
+            self.lfa1["LIFNR"].to_numpy(), size=target_draws, replace=True, p=p_weights
         )
 
         # select materials randomly
         sel_materials = np.random.choice(
-            self.mara["MATNR"].to_numpy(), size=target, replace=True
+            self.mara["MATNR"].to_numpy(), size=target_draws, replace=True
         )
 
         # temp df for deduplication and price lookup
@@ -282,6 +285,8 @@ class SAPDataGenerator:
         temp_df = temp_df.drop_duplicates(subset=["LIFNR", "MATNR"]).reset_index(
             drop=True
         )
+        # Take exactly target rows after deduplication
+        temp_df = temp_df.head(target)
         mara_prices = self.mara[["MATNR", "base_price"]].copy()
         temp_df = temp_df.merge(mara_prices, on="MATNR", how="left")
         n = len(temp_df)
@@ -293,12 +298,12 @@ class SAPDataGenerator:
         # dates
         sim_start = pd.Timestamp(self.config.start_date)
         sim_end = pd.Timestamp(self.config.end_date)
-        valid_from_end = sim_end - pd.Timedelta(days=180)  # 6 month runway
+        valid_from_end = sim_end - pd.Timedelta(days=90)  # 3 month runway
         valid_from = pd.to_datetime(
             np.random.choice(pd.date_range(sim_start, valid_from_end), size=n)
         )
-        duration_days = np.random.randint(180, 1095, n)
-        valid_to = valid_from + pd.to_timedelta(duration_days, unit="D")  # type: ignore[arg-type]
+        duration_days = np.random.randint(365, 1095, n)
+        valid_to = valid_from + pd.to_timedelta(duration_days, unit="D")
 
         contract_type = np.random.choice(
             ["BLANKET", "SPOT", "FRAMEWORK"], size=n, p=[0.5, 0.4, 0.1]
@@ -324,8 +329,91 @@ class SAPDataGenerator:
         Generate PO Headers (EKKO).
         """
         n = self.config.num_pos
+        sim_end = pd.Timestamp(self.config.end_date)
+        cutoff_date = sim_end - pd.Timedelta(days=90)
 
-        elbeln = [f"PO{i:010d}" for i in range(1, n + 1)]
+        date_range = pd.date_range(self.config.start_date, self.config.end_date)
+
+        # Q4 should have more weight for year-end spending
+        date_weights = np.where(date_range.month.isin([10, 11, 12]), 1.3, 1.0)
+        date_weights = date_weights / date_weights.sum()
+
+        # po dates
+        aedat = np.random.choice(date_range, size=n, p=date_weights)
+
+        # vendor selection
+        assert self.lfa1 is not None, "LFA1 must be generated before EKKO"
+        spend_weights = self.lfa1["spend_weight"].to_numpy()
+        p_weights = spend_weights / spend_weights.sum()
+        lifnr = np.random.choice(self.lfa1["LIFNR"].to_numpy(), size=n, p=p_weights)
+
+        # blocked vendors cannot have recent POs
+        vendor_meta = pd.DataFrame({"LIFNR": lifnr}).merge(
+            self.lfa1[["LIFNR", "SPERR", "ERDAT"]], on="LIFNR", how="left"
+        )
+        bad_mask = (vendor_meta["SPERR"] == "X") & (aedat >= cutoff_date)
+
+        # categorize bad POs
+        impossible_mask = bad_mask & (
+            vendor_meta["ERDAT"] >= cutoff_date
+        )  # impossible (ERDAT >= cutoff)
+        shiftable_mask = bad_mask & (
+            vendor_meta["ERDAT"] < cutoff_date
+        )  # shiftable (ERDAT < cutoff)
+
+        # shift dates back for shiftable POs to between ERDAT and cutoff
+        if shiftable_mask.any():
+            erdat_vals = pd.DatetimeIndex(
+                vendor_meta.loc[shiftable_mask, "ERDAT"].values
+            )
+            days_range = (
+                pd.DatetimeIndex([cutoff_date] * len(erdat_vals)) - erdat_vals
+            ).days.to_numpy()
+            # Vectorized: random fraction of days_range
+            random_fractions = np.random.random(len(days_range))
+            random_offsets = (random_fractions * np.maximum(days_range, 0)).astype(int)
+            aedat[shiftable_mask] = (
+                erdat_vals + pd.to_timedelta(random_offsets, unit="D")
+            ).to_numpy()
+
+        safe_vendors = self.lfa1[self.lfa1["SPERR"] == ""]["LIFNR"].to_numpy()
+        lifnr[impossible_mask] = np.random.choice(
+            safe_vendors, size=impossible_mask.sum()
+        )
+
+        is_large = np.random.random(n) < self.config.large_order_prob
+
+        nb_prob = np.where(
+            is_large, np.random.uniform(0.8, 0.95, n), np.random.uniform(0.6, 0.8, n)
+        )
+        bsart = np.where(np.random.random(n) < nb_prob, "NB", "FO")
+
+        ebeln = np.array([f"PO{i:010d}" for i in range(1, n + 1)])
+
+        bukrs = np.random.choice(["1000", "2000", "3000"], size=n)  # company codes
+        waers = np.random.choice(
+            ["USD", "EUR", "GBP"], size=n, p=[0.6, 0.3, 0.1]
+        )  # Currencies
+        ekorg = np.random.choice(["ORG1", "ORG2", "ORG3"], size=n)  # purchasing orgs
+        ekgrp = np.random.choice(
+            ["GRP1", "GRP2", "GRP3", "GRP4"], size=n
+        )  # purchasing groups
+        bedat = aedat  # Document date = PO date for simplicity
+
+        self.ekko = pd.DataFrame(
+            {
+                "EBELN": ebeln,
+                "BUKRS": bukrs,
+                "BSART": bsart,
+                "AEDAT": aedat,
+                "LIFNR": lifnr,
+                "WAERS": waers,
+                "EKORG": ekorg,
+                "EKGRP": ekgrp,
+                "BEDAT": bedat,
+                "is_large": is_large,
+            }
+        )
 
     def _generate_ekpo(self):
         """
@@ -345,7 +433,7 @@ class SAPDataGenerator:
 
     def _cleanup_hidden_columns(self):
         """Drop internal helper columns (weights, base_price, bias) before saving."""
-        # TODO: Drop 'spend_weight', 'perf_bias', 'base_price', 'is_whale'
+        # TODO: Drop 'spend_weight', 'perf_bias', 'base_price', 'is_large'
         pass
 
     def save_to_parquet(self, output_dir: str):
