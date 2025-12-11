@@ -3,7 +3,7 @@ pandas
 numpy
 Faker
 
-# dashborad
+# dashboard
 streamlit
 
 # testing
@@ -18,3 +18,5 @@ isort
 pyarrow
 fastparquet
 
+# datavis
+plotly
