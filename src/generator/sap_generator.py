@@ -79,11 +79,15 @@ class SAPDataGenerator:
         # IDs
         lifnr = np.array([f"V{i:07d}" for i in range(1, n + 1)])
 
-        # Pareto weights: top 20% get weight=100, rest get 1
+        # shuffle to randomize which vendors become top-tier (this prevents early IDs always being top)
+        shuffle_idx = np.random.permutation(n)
+        lifnr = lifnr[shuffle_idx]  # comment this out for deterministic top vendors
+
+        # pareto weights: top 20% get weight=100, rest get 1
         spend_weight = np.where(np.arange(n) < num_top, 100, 1)
 
-        # KTOKK: vectorized conditional logic
-        # Top vendors: 40% chance PREF, Others: 5% chance PREF
+        # KTOKK
+        # top vendors: 40% chance PREF, Others: 5% chance PREF
         probs = np.random.random(n)
         conditions = [
             (probs < 0.40) & (spend_weight == 100),  # Top vendors, lucky
@@ -97,7 +101,7 @@ class SAPDataGenerator:
         # Performance bias
         perf_bias = np.random.normal(0, 2.0, n)
 
-        # Faker fields (still need list comprehension for external library)
+        # Faker fields
         name1 = np.array([fake.company() for _ in range(n)])
         land1 = np.array([fake.country_code() for _ in range(n)])
         ort01 = np.array([fake.city() for _ in range(n)])
@@ -105,7 +109,7 @@ class SAPDataGenerator:
         telf1 = np.array([fake.phone_number() for _ in range(n)])
         smtp_addr = np.array([fake.company_email() for _ in range(n)])
 
-        # Dates: pandas native
+        # Dates
         sim_start = pd.Timestamp(self.config.start_date)
         erdat_end = sim_start - pd.Timedelta(days=1)
         erdat_start = sim_start - pd.Timedelta(days=365 * 10)
@@ -133,6 +137,8 @@ class SAPDataGenerator:
     def _generate_mara(self):
         """
         Generate Material Master (MARA).
+        weight range and uom depend on material category for realism.
+        currently hardcoded distribution of categories. Can be extended to config later.
         """
 
         total_materials = self.config.num_materials
@@ -211,7 +217,7 @@ class SAPDataGenerator:
             # desc
             batch_maktx = [f"{category} - {fake.bs()}" for _ in range(count)]
 
-            # creation date, <=start of simulation, using pandas Timestamp
+            # creation date, <=start of simulation
             sim_start = pd.Timestamp(self.config.start_date)
             ersda_end = sim_start - pd.Timedelta(days=1)
             ersda_start = sim_start - pd.Timedelta(days=365 * 10)
@@ -253,6 +259,7 @@ class SAPDataGenerator:
     def _generate_contracts(self):
         """
         Generate Vendor Contracts (Custom Table).
+        discrepancy in requirements doc, 2k minimum, but 40% of 5k*1k=2M, so function is designed to handle generation of very large data.
         """
         assert self.lfa1 is not None, "LFA1 must be generated before contracts"
         assert self.mara is not None, "MARA must be generated before contracts"
@@ -316,10 +323,7 @@ class SAPDataGenerator:
     def _generate_ekko(self):
         """
         Generate PO Headers (EKKO).
-
         """
-        # TODO: Implementation
-        pass
 
     def _generate_ekpo(self):
         """
