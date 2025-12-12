@@ -98,9 +98,34 @@ class GeneratorConfig:
             0.10,
         ]  # Short/Medium/Major delay distribution
     )
+    early_delivery_bias: float = (
+        0.10  # Reduction in late_prob for earlier expected dates
+    )
 
+    # Contract Settings
+    contract_duration_range: Tuple[int, int] = (
+        365,
+        1095,
+    )  # Contract validity in days (1-3 years)
+
+    # Invoice Processing
+    invoice_generation_rate: float = (
+        0.95  # Probability that GR has corresponding invoice
+    )
     invoice_processing_range: Tuple[int, int] = (5, 30)  # Days after GR for invoice
+
+    # Seasonality
     seasonality_q4_factor: float = 1.3  # Weight multiplier for Q4 months
+
+    # Organizational Structure
+    company_codes: List[str] = field(default_factory=lambda: ["1000", "2000", "3000"])
+    currencies: List[str] = field(default_factory=lambda: ["USD", "EUR", "GBP"])
+    currency_distribution: List[float] = field(default_factory=lambda: [0.6, 0.3, 0.1])
+    purchasing_orgs: List[str] = field(default_factory=lambda: ["ORG1", "ORG2", "ORG3"])
+    purchasing_groups: List[str] = field(
+        default_factory=lambda: ["GRP1", "GRP2", "GRP3", "GRP4"]
+    )
+    plants: List[str] = field(default_factory=lambda: ["1000", "2000", "3000", "4000"])
 
     material_categories: Dict[str, CategoryConfig] = field(
         default_factory=_default_material_categories
@@ -370,7 +395,11 @@ class SAPDataGenerator:
         valid_from = pd.to_datetime(
             np.random.choice(pd.date_range(sim_start, valid_from_end), size=n)
         )
-        duration_days: NDArray[np.int_] = np.random.randint(365, 1095, n)
+
+        min_duration, max_duration = self.config.contract_duration_range
+        duration_days: NDArray[np.int_] = np.random.randint(
+            min_duration, max_duration, n
+        )
         valid_to = valid_from + pd.to_timedelta(duration_days, unit="D")
 
         contract_type = np.random.choice(
@@ -464,14 +493,12 @@ class SAPDataGenerator:
 
         ebeln = np.array([f"PO{i:010d}" for i in range(1, n + 1)])
 
-        # company codes
-        bukrs = np.random.choice(["1000", "2000", "3000"], size=n)
-        # Currencies
-        waers = np.random.choice(["USD", "EUR", "GBP"], size=n, p=[0.6, 0.3, 0.1])
-        # purchasing orgs
-        ekorg = np.random.choice(["ORG1", "ORG2", "ORG3"], size=n)
-        # purchasing groups
-        ekgrp = np.random.choice(["GRP1", "GRP2", "GRP3", "GRP4"], size=n)
+        bukrs = np.random.choice(self.config.company_codes, size=n)
+        waers = np.random.choice(
+            self.config.currencies, size=n, p=self.config.currency_distribution
+        )
+        ekorg = np.random.choice(self.config.purchasing_orgs, size=n)
+        ekgrp = np.random.choice(self.config.purchasing_groups, size=n)
         bedat = aedat  # document date = PO date
 
         self.ekko = pd.DataFrame(
@@ -638,9 +665,7 @@ class SAPDataGenerator:
             suffixes=("", "_mara"),  # Handle collision if any
         )
 
-        items_df["WERKS"] = np.random.choice(
-            ["1000", "2000", "3000", "4000"], size=len(items_df)
-        )
+        items_df["WERKS"] = np.random.choice(self.config.plants, size=len(items_df))
 
         self.ekpo = items_df[
             [
@@ -684,21 +709,21 @@ class SAPDataGenerator:
 
         base_late_prob = self.config.delivery_late_rate
 
-        # noise = np.random.normal(1.5, 2.0, len(gr_df))
+        # normalize within timeframe
+        sim_start = pd.Timestamp(self.config.start_date)
+        sim_end = pd.Timestamp(self.config.end_date)
+        total_days = (sim_end - sim_start).days
 
-        # total_delay = (gr_df["perf_bias"] + noise).astype(int)
+        # normalize the "earliness"
+        days_from_start = (gr_df["EINDT"] - sim_start).dt.days
+        earliness_factor = 1.0 - (days_from_start / total_days)
 
-        # gr_df["BUDAT"] = gr_df["EINDT"] + cast(
-        #     Any, pd.to_timedelta(total_delay, unit="D")  # type: ignore[reportUnknownMemberType]
-        # )
+        # Reduce late probability for early
+        early_adjustment = earliness_factor * self.config.early_delivery_bias
 
-        # early_mask = gr_df["BUDAT"] < gr_df["AEDAT"]
-        # gr_df.loc[early_mask, "BUDAT"] = gr_df.loc[early_mask, "AEDAT"] + cast(
-        #     Any,
-        #     pd.to_timedelta(np.random.randint(0, 2, size=early_mask.sum()), unit="D"),
-        # )
-
-        late_prob = np.clip(base_late_prob + (gr_df["perf_bias"] * 0.05), 0.05, 0.95)
+        late_prob = np.clip(
+            base_late_prob + (gr_df["perf_bias"] * 0.05) - early_adjustment, 0.05, 0.95
+        )
         is_late = np.random.random(n_gr) < late_prob
 
         delay_days = np.zeros(n_gr, dtype=int)
@@ -744,7 +769,7 @@ class SAPDataGenerator:
         gr_df.rename(columns={"NETWR": "DMBTR"}, inplace=True)
 
         # Invoice Receipt
-        has_invoice = np.random.random(len(gr_df)) < 0.95
+        has_invoice = np.random.random(len(gr_df)) < self.config.invoice_generation_rate
         ir_df = gr_df[has_invoice].copy()
         ir_df["BEWTP"] = "Q"
 
