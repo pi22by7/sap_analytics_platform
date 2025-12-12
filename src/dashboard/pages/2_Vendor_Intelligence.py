@@ -30,7 +30,6 @@ filtered_vendors = df_lfa1[
 ]
 
 # Search Panel
-# This acts as the "Drill Down" mechanism
 vendor_list = filtered_vendors["LIFNR"] + " - " + filtered_vendors["NAME1"]
 selected_vendor_str = st.selectbox(
     "🔍 Search & Select Vendor to Analyze:", options=vendor_list

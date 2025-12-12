@@ -153,3 +153,5 @@ data/generated/
 *.parquet
 *.csv
 *.xlsx
+
+reports/
