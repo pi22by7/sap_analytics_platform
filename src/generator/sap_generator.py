@@ -156,12 +156,17 @@ class SAPDataGenerator:
         base_price: List[float] = []
 
         categories: dict[str, CategoryConfig] = {
-            "ELECT": {  # Electronics
-                "price_range": (100, 10000),
+            "ELECT_F": {  # Electronics (Finished)
+                "price_range": (1000, 10000),  # Higher end
                 "uom_options": ["PC", "EA"],
-                "weight_range": (0.5, 20.0),  # kg
-                # Finished Goods
-                "mat_type": "FERT",
+                "weight_range": (1.0, 20.0),
+                "mat_type": "FERT",  # Finished
+            },
+            "ELECT_P": {  # Electronics (Components/Parts)
+                "price_range": (100, 1000),  # Lower end
+                "uom_options": ["PC", "EA"],
+                "weight_range": (0.1, 2.0),
+                "mat_type": "HALB",  # Semifinished
             },
             "OFFICE": {  # Office Supplies
                 "price_range": (1, 500),
@@ -186,7 +191,8 @@ class SAPDataGenerator:
         }
 
         counts = {
-            "ELECT": int(total_materials * 0.35),
+            "ELECT_F": int(total_materials * 0.20),
+            "ELECT_P": int(total_materials * 0.15),
             "OFFICE": int(total_materials * 0.30),
             "RAW": int(total_materials * 0.25),
             # subtracted to ensure rounding errors don't leave
@@ -195,6 +201,8 @@ class SAPDataGenerator:
         }
 
         for category, count in counts.items():
+
+            display_cat = "ELECT" if "ELECT" in category else category
             # hidden column for price anchoring
             batch_prices = np.exp(
                 np.random.uniform(
@@ -221,7 +229,7 @@ class SAPDataGenerator:
             batch_meins = np.random.choice(uom_opts, count)
 
             # desc
-            batch_maktx = [f"{category} - {fake.bs()}" for _ in range(count)]
+            batch_maktx = [f"{display_cat} - {fake.bs()}" for _ in range(count)]
 
             # creation date, <=start of simulation
             sim_start = pd.Timestamp(self.config.start_date)
@@ -234,7 +242,7 @@ class SAPDataGenerator:
             ]
 
             # assemble the df for the category - extend all lists
-            matkl.extend([category] * count)
+            matkl.extend([display_cat] * count)
             mtart.extend([categories[category]["mat_type"]] * count)
             base_price.extend(batch_prices.tolist())
             meins.extend(batch_meins.tolist())
@@ -437,6 +445,7 @@ class SAPDataGenerator:
         """
         Generate PO Line Items (EKPO).
         """
+        assert self.lfa1 is not None
         assert self.ekko is not None
         assert self.mara is not None
         assert self.contracts is not None
@@ -522,9 +531,15 @@ class SAPDataGenerator:
             how="left",
         )
 
-        # Add price noise for spot items
-        noise: NDArray[np.float64] = np.random.normal(1.0, 0.15, total_items)
-        spot_price: pd.Series[Any] = items_df["base_price"] * noise
+        items_df = items_df.merge(self.lfa1[["LIFNR", "KTOKK"]], on="LIFNR", how="left")
+
+        noise = np.random.normal(1.0, 0.15, total_items)
+        spot_price = items_df["base_price"] * noise
+
+        pref_mask = items_df["KTOKK"] == "PREF"
+
+        pref_discount = np.random.uniform(0.85, 0.90, total_items)
+        spot_price = np.where(pref_mask, spot_price * pref_discount, spot_price)
 
         if "CONTRACT_PRICE" in items_df.columns:
             items_df["NETPR"] = np.where(
@@ -564,6 +579,17 @@ class SAPDataGenerator:
             Any, pd.to_timedelta(lead_time_days, unit="D")
         )
 
+        items_df = items_df.merge(
+            self.mara[["MATNR", "MATKL", "MEINS"]],
+            on="MATNR",
+            how="left",
+            suffixes=("", "_mara"),  # Handle collision if any
+        )
+
+        items_df["WERKS"] = np.random.choice(
+            ["1000", "2000", "3000", "4000"], size=len(items_df)
+        )
+
         self.ekpo = items_df[
             [
                 "EBELN",
@@ -573,6 +599,9 @@ class SAPDataGenerator:
                 "NETPR",
                 "NETWR",
                 "EINDT",
+                "MATKL",
+                "MEINS",
+                "WERKS",
             ]
         ]
 
@@ -596,28 +625,76 @@ class SAPDataGenerator:
             how="left",
         )
 
+        # Delivery Dates
         gr_df = base_df.copy()
         gr_df["BEWTP"] = "E"
+        n_gr = len(gr_df)
 
-        noise = np.random.normal(1.5, 2.0, len(gr_df))
+        base_late_prob = 0.25
 
-        total_delay = (gr_df["perf_bias"] + noise).astype(int)
+        # noise = np.random.normal(1.5, 2.0, len(gr_df))
 
-        gr_df["BUDAT"] = gr_df["EINDT"] + cast(
-            Any, pd.to_timedelta(total_delay, unit="D")  # type: ignore[reportUnknownMemberType]
+        # total_delay = (gr_df["perf_bias"] + noise).astype(int)
+
+        # gr_df["BUDAT"] = gr_df["EINDT"] + cast(
+        #     Any, pd.to_timedelta(total_delay, unit="D")  # type: ignore[reportUnknownMemberType]
+        # )
+
+        # early_mask = gr_df["BUDAT"] < gr_df["AEDAT"]
+        # gr_df.loc[early_mask, "BUDAT"] = gr_df.loc[early_mask, "AEDAT"] + cast(
+        #     Any,
+        #     pd.to_timedelta(np.random.randint(0, 2, size=early_mask.sum()), unit="D"),
+        # )
+
+        late_prob = np.clip(base_late_prob + (gr_df["perf_bias"] * 0.05), 0.05, 0.95)
+        is_late = np.random.random(n_gr) < late_prob
+
+        delay_days = np.zeros(n_gr, dtype=int)
+
+        if is_late.any():
+            n_late = is_late.sum()
+            # buckets: 1=Short(70%), 2=Medium(20%), 3=Major(10%)
+            buckets = np.random.choice([1, 2, 3], size=n_late, p=[0.70, 0.20, 0.10])
+
+            late_delays = np.zeros(n_late, dtype=int)
+
+            # 1-7 days
+            mask_1 = buckets == 1
+            late_delays[mask_1] = np.random.randint(1, 8, size=mask_1.sum())
+
+            # 8-14 days
+            mask_2 = buckets == 2
+            late_delays[mask_2] = np.random.randint(8, 15, size=mask_2.sum())
+
+            # 15-30 days
+            mask_3 = buckets == 3
+            late_delays[mask_3] = np.random.randint(15, 31, size=mask_3.sum())
+
+            delay_days[is_late] = late_delays
+
+        early_days = np.random.randint(-5, 1, size=n_gr)
+        final_days = np.where(is_late, delay_days, early_days)
+
+        # actual delivery date
+        gr_df["ACTUAL_DELIVERY_DATE"] = gr_df["EINDT"] + cast(
+            Any, pd.to_timedelta(final_days, unit="D")
         )
 
-        early_mask = gr_df["BUDAT"] < gr_df["AEDAT"]
-        gr_df.loc[early_mask, "BUDAT"] = gr_df.loc[early_mask, "AEDAT"] + cast(
-            Any,
-            pd.to_timedelta(np.random.randint(0, 2, size=early_mask.sum()), unit="D"),
-        )
+        too_early_mask = gr_df["ACTUAL_DELIVERY_DATE"] < gr_df["AEDAT"]
+        gr_df.loc[too_early_mask, "ACTUAL_DELIVERY_DATE"] = gr_df.loc[
+            too_early_mask, "AEDAT"
+        ]
+
+        gr_df["BUDAT"] = gr_df["ACTUAL_DELIVERY_DATE"]
 
         gr_df.rename(columns={"NETWR": "DMBTR"}, inplace=True)
 
+        # Invoice Receipt
         has_invoice = np.random.random(len(gr_df)) < 0.95
         ir_df = gr_df[has_invoice].copy()
         ir_df["BEWTP"] = "Q"
+
+        ir_df["ACTUAL_DELIVERY_DATE"] = pd.NaT
 
         processing_time = np.random.randint(5, 30, size=len(ir_df))
         ir_df["BUDAT"] = ir_df["BUDAT"] + cast(
@@ -628,9 +705,7 @@ class SAPDataGenerator:
         ir_df["DMBTR"] = ir_df["DMBTR"] * price_noise
         ir_df["DMBTR"] = ir_df["DMBTR"].round(2)
 
-        self.ekbe = pd.concat([gr_df, ir_df], ignore_index=True)[
-            ["EBELN", "EBELP", "BEWTP", "BUDAT", "MENGE", "DMBTR"]
-        ]
+        self.ekbe = pd.concat([gr_df, ir_df], ignore_index=True)
 
         self.ekbe = self.ekbe.sort_values(by=["EBELN", "EBELP", "BUDAT"]).reset_index(
             drop=True
@@ -641,7 +716,16 @@ class SAPDataGenerator:
         )
 
         self.ekbe = self.ekbe[
-            ["EBELN", "EBELP", "BEWTP", "BUDAT", "MENGE", "DMBTR", "BELNR"]
+            [
+                "EBELN",
+                "EBELP",
+                "BEWTP",
+                "BUDAT",
+                "MENGE",
+                "DMBTR",
+                "BELNR",
+                "ACTUAL_DELIVERY_DATE",
+            ]
         ].reset_index(drop=True)
 
     def _cleanup_hidden_columns(self):
@@ -695,6 +779,49 @@ class SAPDataGenerator:
             else:
                 print(f"⚠ {name}: Dataframe is empty or None, skipping.")
 
+    def print_summary_stats(self):
+        print("\n--- GENERATION SUMMARY ---")
+
+        # Check if required data exists
+        if (
+            self.ekpo is None
+            or self.ekko is None
+            or self.ekbe is None
+            or self.lfa1 is None
+        ):
+            print("Error: Required data not generated yet.")
+            return
+
+        # 1. Total Spend
+        total_spend = self.ekpo["NETWR"].sum()
+        print(f"Total Spend: ${total_spend:,.2f}")
+
+        # 2. Contract vs Non-Contract (based on EKKO BSART)
+        merged = self.ekpo.merge(self.ekko[["EBELN", "BSART"]], on="EBELN")
+        spend_by_type = merged.groupby("BSART")["NETWR"].sum()
+        print("\nSpend by PO Type:")
+        print(spend_by_type.apply(lambda x: f"${x:,.2f}"))
+
+        # 3. Delivery Performance
+        grs = self.ekbe[self.ekbe["BEWTP"] == "E"].merge(
+            self.ekpo[["EBELN", "EBELP", "EINDT"]], on=["EBELN", "EBELP"]
+        )
+        date_col = (
+            "ACTUAL_DELIVERY_DATE" if "ACTUAL_DELIVERY_DATE" in grs.columns else "BUDAT"
+        )
+        late_mask = grs[date_col] > grs["EINDT"]
+        late_pct = late_mask.mean() * 100
+        print(f"\nDelivery Performance: {late_pct:.1f}% Late Deliveries")
+
+        # 4. Top 5 Vendors
+        top_vendors = merged.groupby("LIFNR")["NETWR"].sum().nlargest(5)
+        print("\nTop 5 Vendors by Spend:")
+        top_vendors = top_vendors.reset_index().merge(
+            self.lfa1[["LIFNR", "NAME1"]], on="LIFNR"
+        )
+        for _, row in top_vendors.iterrows():
+            print(f"- {row['NAME1']} ({row['LIFNR']}): ${row['NETWR']:,.2f}")
+
 
 if __name__ == "__main__":
     # config
@@ -712,3 +839,5 @@ if __name__ == "__main__":
     generator.save_to_parquet("data")
 
     print("\nGeneration Complete.")
+
+    generator.print_summary_stats()
