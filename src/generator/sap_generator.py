@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 from numpy.typing import NDArray
-from dataclasses import dataclass
-from typing import Optional, TypedDict, List, Tuple, Any, cast
+from dataclasses import dataclass, field
+from typing import Optional, TypedDict, List, Tuple, Any, cast, Dict
 from faker import Faker
 
 fake = Faker()
@@ -15,13 +15,49 @@ class CategoryConfig(TypedDict):
     mat_type: str
 
 
+def _default_material_categories() -> Dict[str, CategoryConfig]:
+    """Default material categories configuration."""
+    return {
+        "ELECT_F": {  # Electronics (Finished)
+            "price_range": (1000, 10000),
+            "uom_options": ["PC", "EA"],
+            "weight_range": (1.0, 20.0),
+            "mat_type": "FERT",  # Finished
+        },
+        "ELECT_P": {  # Electronics (Components/Parts)
+            "price_range": (100, 1000),
+            "uom_options": ["PC", "EA"],
+            "weight_range": (0.1, 2.0),
+            "mat_type": "HALB",  # Semifinished
+        },
+        "OFFICE": {  # Office Supplies
+            "price_range": (1, 500),
+            "uom_options": ["EA", "BOX", "PAK"],
+            "weight_range": (0.1, 5.0),
+            "mat_type": "HAWA",  # Trading Goods
+        },
+        "RAW": {  # Raw Materials
+            "price_range": (50, 5000),
+            "uom_options": ["KG", "L", "M", "TON"],
+            "weight_range": (10.0, 1000.0),
+            "mat_type": "ROH",  # Raw Materials
+        },
+        "SERV": {  # Services
+            "price_range": (500, 50000),
+            "uom_options": ["AU", "HR", "DAY"],
+            "weight_range": (0, 0),  # Intangible
+            "mat_type": "DIEN",  # Services
+        },
+    }
+
+
 @dataclass
 class GeneratorConfig:
     """Configuration parameters for the SAP Data Generator."""
 
     seed: int = 4242
     start_date: str = "2020-01-01"
-    end_date: str = "2025-12-31"
+    end_date: str = "2024-12-31"  # match requirements doc
 
     # Volume settings
     num_vendors: int = 1000
@@ -29,13 +65,46 @@ class GeneratorConfig:
     num_pos: int = 10000
     num_contracts: int = 2000000
 
-    # Business Logic parameters
-    pareto_split: float = 0.20  # 20% vendors
-    pareto_spend_share: float = 0.80  # 80% spend
-    # % of vendor-material pairs with contracts
-    contract_coverage: float = 0.45
-    # Probability of a 'large' order (>50k)
+    # Business Logic parameters - Vendor Distribution
+    pareto_split: float = 0.20  # 20% vendors are top tier
+    pareto_spend_share: float = 0.80  # 80% spend goes to top vendors
+
+    # Vendor Preferences
+    preferred_vendor_ratio: float = 0.10  # 10% of vendors are preferred
+    preferred_price_discount: Tuple[float, float] = (0.10, 0.15)  # 10-15% discount
+
+    # Contract Management
+    contract_coverage: float = 0.45  # % of vendor-material pairs with contracts
+    contract_discount_range: Tuple[float, float] = (0.05, 0.15)  # 5-15% discount
+
+    # Pricing & Volatility
+    price_volatility: float = 0.15  # sigma for price noise
+
+    # Order Management
     large_order_prob: float = 0.05
+    large_order_threshold: int = 50000  # Value threshold for large orders
+    large_order_value_range: Tuple[int, int] = (15000, 50000)  # Target value range
+
+    # PO Line Item Distribution
+    po_item_dist_params: Tuple[float, float] = (1.2, 0.5)  # Log-normal (mu, sigma)
+    po_max_items: int = 15  # Maximum items per PO
+
+    # Delivery Performance
+    delivery_late_rate: float = 0.25  # base probability of late delivery
+    delivery_delay_probs: List[float] = field(
+        default_factory=lambda: [
+            0.70,
+            0.20,
+            0.10,
+        ]  # Short/Medium/Major delay distribution
+    )
+
+    invoice_processing_range: Tuple[int, int] = (5, 30)  # Days after GR for invoice
+    seasonality_q4_factor: float = 1.3  # Weight multiplier for Q4 months
+
+    material_categories: Dict[str, CategoryConfig] = field(
+        default_factory=_default_material_categories
+    )
 
 
 class SAPDataGenerator:
@@ -82,12 +151,19 @@ class SAPDataGenerator:
         # pareto weights: top 20% get weight=100, rest get 1
         spend_weight = np.where(np.arange(n) < num_top, 100, 1)
 
-        # KTOKK
-        # top vendors: 40% chance PREF, Others: 5% chance PREF
+        # KTOKK - Preferred Vendor Logic
+        num_preferred = int(n * self.config.preferred_vendor_ratio)
+
+        num_pref_top = int(num_preferred * 0.80)
+        num_pref_bottom = num_preferred - num_pref_top
+
         probs = np.random.random(n)
+        top_threshold = num_pref_top / num_top if num_top > 0 else 0
+        bottom_threshold = num_pref_bottom / (n - num_top) if (n - num_top) > 0 else 0
+
         conditions = [
-            (probs < 0.40) & (spend_weight == 100),  # Top vendors, lucky
-            (probs < 0.05) & (spend_weight == 1),  # Bottom vendors, lucky
+            (probs < top_threshold) & (spend_weight == 100),  # Top vendors
+            (probs < bottom_threshold) & (spend_weight == 1),  # Bottom vendors
         ]
         ktokk = np.select(conditions, ["PREF", "PREF"], default="STD")
 
@@ -155,41 +231,9 @@ class SAPDataGenerator:
         ntgew: List[float] = []
         base_price: List[float] = []
 
-        categories: dict[str, CategoryConfig] = {
-            "ELECT_F": {  # Electronics (Finished)
-                "price_range": (1000, 10000),  # Higher end
-                "uom_options": ["PC", "EA"],
-                "weight_range": (1.0, 20.0),
-                "mat_type": "FERT",  # Finished
-            },
-            "ELECT_P": {  # Electronics (Components/Parts)
-                "price_range": (100, 1000),  # Lower end
-                "uom_options": ["PC", "EA"],
-                "weight_range": (0.1, 2.0),
-                "mat_type": "HALB",  # Semifinished
-            },
-            "OFFICE": {  # Office Supplies
-                "price_range": (1, 500),
-                "uom_options": ["EA", "BOX", "PAK"],
-                "weight_range": (0.1, 5.0),
-                # Trading Goods
-                "mat_type": "HAWA",
-            },
-            "RAW": {  # Raw Materials
-                "price_range": (50, 5000),
-                "uom_options": ["KG", "L", "M", "TON"],
-                "weight_range": (10.0, 1000.0),
-                # Raw Materials
-                "mat_type": "ROH",
-            },
-            "SERV": {  # Services
-                "price_range": (500, 50000),
-                "uom_options": ["AU", "HR", "DAY"],  # Activity Unit, Hour, Day
-                "weight_range": (0, 0),  # Intangible
-                "mat_type": "DIEN",  # Services
-            },
-        }
+        categories = self.config.material_categories
 
+        # can also be made configurable if needed but deferred for now
         counts = {
             "ELECT_F": int(total_materials * 0.20),
             "ELECT_P": int(total_materials * 0.15),
@@ -312,7 +356,11 @@ class SAPDataGenerator:
 
         contract_id = np.array([f"C{i:09d}" for i in range(1, n + 1)])
         base_prices = temp_df["base_price"].to_numpy(dtype=np.float64)
-        contract_price = base_prices * np.random.uniform(0.85, 0.95, n)
+
+        min_discount, max_discount = self.config.contract_discount_range
+        contract_price = base_prices * np.random.uniform(
+            1 - max_discount, 1 - min_discount, n
+        )
 
         # dates
         sim_start = pd.Timestamp(self.config.start_date)
@@ -356,7 +404,7 @@ class SAPDataGenerator:
 
         # Q4 weighted higher for year-end spend
         date_weights: NDArray[np.float64] = np.where(
-            date_range.month.isin([10, 11, 12]), 1.3, 1.0
+            date_range.month.isin([10, 11, 12]), self.config.seasonality_q4_factor, 1.0
         )
         date_weights = date_weights / date_weights.sum()
 
@@ -451,9 +499,9 @@ class SAPDataGenerator:
         assert self.contracts is not None
         num_headers = self.config.num_pos
 
-        mu, sigma = 1.2, 0.5
+        mu, sigma = self.config.po_item_dist_params
         item_counts = np.random.lognormal(mu, sigma, num_headers).astype(int)
-        item_counts = np.clip(item_counts, 1, 15)  # limit to 15 items max
+        item_counts = np.clip(item_counts, 1, self.config.po_max_items)
         total_items = item_counts.sum()
 
         items_df = pd.DataFrame(
@@ -533,12 +581,15 @@ class SAPDataGenerator:
 
         items_df = items_df.merge(self.lfa1[["LIFNR", "KTOKK"]], on="LIFNR", how="left")
 
-        noise = np.random.normal(1.0, 0.15, total_items)
+        noise = np.random.normal(1.0, self.config.price_volatility, total_items)
         spot_price = items_df["base_price"] * noise
 
         pref_mask = items_df["KTOKK"] == "PREF"
 
-        pref_discount = np.random.uniform(0.85, 0.90, total_items)
+        min_discount, max_discount = self.config.preferred_price_discount
+        pref_discount = np.random.uniform(
+            1 - max_discount, 1 - min_discount, total_items
+        )
         spot_price = np.where(pref_mask, spot_price * pref_discount, spot_price)
 
         if "CONTRACT_PRICE" in items_df.columns:
@@ -554,13 +605,14 @@ class SAPDataGenerator:
         menge_vals: NDArray[np.float64] = np.random.lognormal(1.3, 0.6, total_items)
         items_df["MENGE"] = menge_vals.astype(int)
 
-        # large order management
+        # large order management - use configurable thresholds
         large_mask = items_df["is_large"]
         num_large = large_mask.sum()
 
         if num_large > 0:
+            min_val, max_val = self.config.large_order_value_range
             target_val: NDArray[np.float64] = np.random.uniform(
-                15000, 50000, size=num_large
+                min_val, max_val, size=num_large
             )
 
             netpr_large = items_df.loc[large_mask, "NETPR"]
@@ -630,7 +682,7 @@ class SAPDataGenerator:
         gr_df["BEWTP"] = "E"
         n_gr = len(gr_df)
 
-        base_late_prob = 0.25
+        base_late_prob = self.config.delivery_late_rate
 
         # noise = np.random.normal(1.5, 2.0, len(gr_df))
 
@@ -653,8 +705,10 @@ class SAPDataGenerator:
 
         if is_late.any():
             n_late = is_late.sum()
-            # buckets: 1=Short(70%), 2=Medium(20%), 3=Major(10%)
-            buckets = np.random.choice([1, 2, 3], size=n_late, p=[0.70, 0.20, 0.10])
+            # buckets: 1=Short, 2=Medium, 3=Major
+            buckets = np.random.choice(
+                [1, 2, 3], size=n_late, p=self.config.delivery_delay_probs
+            )
 
             late_delays = np.zeros(n_late, dtype=int)
 
@@ -696,7 +750,8 @@ class SAPDataGenerator:
 
         ir_df["ACTUAL_DELIVERY_DATE"] = pd.NaT
 
-        processing_time = np.random.randint(5, 30, size=len(ir_df))
+        min_inv, max_inv = self.config.invoice_processing_range
+        processing_time = np.random.randint(min_inv, max_inv, size=len(ir_df))
         ir_df["BUDAT"] = ir_df["BUDAT"] + cast(
             Any, pd.to_timedelta(processing_time, unit="D")  # type: ignore[reportUnknownMemberType]
         )
