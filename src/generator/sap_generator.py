@@ -268,14 +268,21 @@ class SAPDataGenerator:
         categories = self.config.material_categories
 
         # can also be made configurable if needed but deferred for now
+        c_elect_f = int(total_materials * 0.20)
+        c_elect_p = int(total_materials * 0.15)
+        c_office = int(total_materials * 0.30)
+        c_raw = int(total_materials * 0.25)
+
+        # Calculate SERV as exact remainder to ensure sum == total_materials
+        # -- fix because of an off-by-one error
+        c_serv = total_materials - (c_elect_f + c_elect_p + c_office + c_raw)
+
         counts = {
-            "ELECT_F": int(total_materials * 0.20),
-            "ELECT_P": int(total_materials * 0.15),
-            "OFFICE": int(total_materials * 0.30),
-            "RAW": int(total_materials * 0.25),
-            # subtracted to ensure rounding errors don't leave
-            # unaccounted materials
-            "SERV": total_materials - int(total_materials * 0.9),
+            "ELECT_F": c_elect_f,
+            "ELECT_P": c_elect_p,
+            "OFFICE": c_office,
+            "RAW": c_raw,
+            "SERV": c_serv,
         }
 
         for category, count in counts.items():
@@ -328,6 +335,11 @@ class SAPDataGenerator:
             ersda.extend(batch_ersda)
             brgew.extend(batch_brgew.tolist())
             ntgew.extend(batch_ntgew.tolist())
+
+        # Generate MATNR based on actual total count
+        # - this earlier caused an off-by-one error
+        actual_total = len(matkl)
+        matnr = [f"M{i:08d}" for i in range(1, actual_total + 1)]
 
         # create df and shuffle
         self.mara = pd.DataFrame(

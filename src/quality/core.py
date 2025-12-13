@@ -11,8 +11,9 @@ from src.quality.utils import generate_html_report
 
 
 class DQCore:
-    def __init__(self, data_path="data"):
+    def __init__(self, data_path="data", report_path="reports"):
         self.data_path = data_path
+        self.report_path = report_path
         self.data = {}
         self.results = {
             "timestamp": datetime.now().isoformat(),
@@ -564,6 +565,6 @@ class DQCore:
         self.run_business_logic()
         self.run_stats_and_completeness()
 
-        generate_html_report(self.results, "reports")
+        generate_html_report(self.results, self.report_path)
         print(f"🏁 Validation Complete. Score: {self.results['score']}/100")
         return True
