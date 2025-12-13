@@ -5,6 +5,12 @@ Faker
 
 # dashboard
 streamlit
+plotly
+kaleido
+
+# pdf generation
+reportlab
+matplotlib
 
 # testing
 pytest

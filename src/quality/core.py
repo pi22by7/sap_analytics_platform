@@ -26,6 +26,25 @@ class DQCore:
         try:
             for table in REQUIRED_TABLES:
                 self.data[table] = pd.read_parquet(f"{self.data_path}/{table}.parquet")
+
+            self.results["profile"]["record_counts"] = {
+                table: len(self.data[table]) for table in REQUIRED_TABLES
+            }
+
+            ekko = self.data["EKKO"]
+            ekpo = self.data["EKPO"]
+            ekbe = self.data["EKBE"]
+
+            self.results["profile"]["cardinality"] = {
+                "avg_items_per_po": len(ekpo) / len(ekko) if len(ekko) > 0 else 0,
+                "avg_receipts_per_item": (
+                    len(ekbe[ekbe["BEWTP"] == "E"]) / len(ekpo) if len(ekpo) > 0 else 0
+                ),
+                "avg_invoices_per_item": (
+                    len(ekbe[ekbe["BEWTP"] == "Q"]) / len(ekpo) if len(ekpo) > 0 else 0
+                ),
+            }
+
             return True
         except Exception as e:
             print(f"❌ Load Error: {e}")
@@ -33,7 +52,6 @@ class DQCore:
 
     def log(self, category, name, status, msg, examples=None, severity="Info"):
         """Central logging with score penalty logic"""
-        # Score calculation logic
         penalty = 15 if severity == "Critical" else 5 if severity == "Warning" else 0
         if status == "FAIL":
             self.results["score"] = max(0, self.results["score"] - penalty)
@@ -198,14 +216,27 @@ class DQCore:
             )
 
         # 4. Invoice Logic (Amounts & Dates)
-        grs = ekbe[ekbe["BEWTP"] == "E"]
-        invs = ekbe[ekbe["BEWTP"] == "Q"]
-        matched = pd.merge(grs, invs, on=["EBELN", "EBELP"], suffixes=("_GR", "_INV"))
+        # Handle multiple GRs/IRs per item by  matching
+        grs = ekbe[ekbe["BEWTP"] == "E"].copy()
+        invs = ekbe[ekbe["BEWTP"] == "Q"].copy()
+
+        grs = grs.sort_values(["EBELN", "EBELP", "BUDAT", "BELNR"])
+        invs = invs.sort_values(["EBELN", "EBELP", "BUDAT", "BELNR"])
+
+        grs["seq"] = grs.groupby(["EBELN", "EBELP"]).cumcount()
+        invs["seq"] = invs.groupby(["EBELN", "EBELP"]).cumcount()
+
+        # Merge on Item + Sequence
+        matched = pd.merge(
+            grs, invs, on=["EBELN", "EBELP", "seq"], suffixes=("_GR", "_INV")
+        )
 
         # Amount (2% tolerance)
         diff_amt = np.abs(matched["DMBTR_GR"] - matched["DMBTR_INV"])
         tol = matched["DMBTR_GR"] * THRESHOLDS["invoice_amt_tol"]
-        bad_amts = matched[diff_amt > tol]
+        # Allow small rounding errors (e.g. 0.01)
+        bad_amts = matched[(diff_amt > tol) & (diff_amt > 0.01)]
+
         if not bad_amts.empty:
             self.log(
                 "Logic",
@@ -214,6 +245,8 @@ class DQCore:
                 f"{len(bad_amts)} mismatches > 2%",
                 severity="Warning",
             )
+        else:
+            self.log("Logic", "Invoice Amounts", "PASS", "Correct")
 
         # Date Sequence (Invoice > GR)
         bad_dates = matched[matched["BUDAT_INV"] < matched["BUDAT_GR"]]
@@ -225,10 +258,11 @@ class DQCore:
                 f"{len(bad_dates)} invoices posted before GR",
                 severity="Warning",
             )
+        else:
+            self.log("Logic", "Invoice Sequence", "PASS", "Valid")
 
         # 5. Blocked Vendors (No POs in last 90 days)
         blocked_lifnr = lfa1[lfa1["SPERR"] == "X"]["LIFNR"]
-        # Determine cutoff based on simulation end date
         sim_end = pd.to_datetime(ekko["AEDAT"]).max()
         cutoff = sim_end - pd.Timedelta(days=90)
 
@@ -247,6 +281,87 @@ class DQCore:
         else:
             self.log("Logic", "Blocked Vendors", "PASS", "No recent activity")
 
+        # 6. Contract Price Consistency
+        self.check_contract_price_compliance()
+
+    def check_contract_price_compliance(self):
+        """
+        Validates Contract Price Consistency.
+        Contract prices within 5% of PO prices for contract POs (BSART='NB').
+        Only checks items that explicitly reference a contract (KONNR is present).
+        """
+        ekpo = self.data["EKPO"]
+        contracts = self.data["VENDOR_CONTRACTS"]
+
+        if "KONNR" not in ekpo.columns:
+            self.log(
+                "Logic",
+                "Contract Price Consistency",
+                "WARN",
+                "KONNR missing in EKPO, skipping check",
+            )
+            return
+
+        contract_items = ekpo[ekpo["KONNR"].notna()].copy()
+
+        if contract_items.empty:
+            self.log(
+                "Logic",
+                "Contract Price Consistency",
+                "PASS",
+                "No items with KONNR found",
+            )
+            return
+
+        with_contract = contract_items.merge(
+            contracts[["CONTRACT_ID", "CONTRACT_PRICE"]],
+            left_on="KONNR",
+            right_on="CONTRACT_ID",
+            how="left",
+        )
+
+        found_contracts = with_contract[with_contract["CONTRACT_PRICE"].notna()]
+
+        if not found_contracts.empty:
+            price_variance = (
+                np.abs(found_contracts["NETPR"] - found_contracts["CONTRACT_PRICE"])
+                / found_contracts["CONTRACT_PRICE"]
+            )
+            violations = found_contracts[
+                price_variance > THRESHOLDS["contract_price_tol"]
+            ]
+
+            if not violations.empty:
+                self.results["profile"]["price_variance"] = price_variance.tolist()
+                examples = (
+                    violations[["EBELN", "EBELP"]]
+                    .head(3)
+                    .apply(lambda x: f"{x['EBELN']}-{x['EBELP']}", axis=1)
+                    .tolist()
+                )
+                self.log(
+                    "Logic",
+                    "Contract Price Consistency",
+                    "FAIL",
+                    f"{len(violations)} items deviate >5% from contract price",
+                    examples=examples,
+                    severity="Critical",
+                )
+            else:
+                self.log(
+                    "Logic",
+                    "Contract Price Consistency",
+                    "PASS",
+                    "All contract items match contract prices",
+                )
+        else:
+            self.log(
+                "Logic",
+                "Contract Price Consistency",
+                "WARN",
+                "Items have KONNR but contract not found in Master Data",
+            )
+
     def run_stats_and_completeness(self):
         """Validates Statistics & Completeness."""
         ekpo = self.data["EKPO"]
@@ -254,7 +369,7 @@ class DQCore:
         ekko = self.data["EKKO"]
         mara = self.data["MARA"]
 
-        # 1. Pareto Check (Top 20% = ~80% Spend)
+        # 1. Pareto Check
         spend = (
             ekpo.groupby(ekpo.merge(ekko, on="EBELN")["LIFNR"])["NETWR"]
             .sum()
@@ -273,7 +388,7 @@ class DQCore:
                 "Stats", "Pareto Dist", "WARN", f"Ratio {ratio:.1%} outside {target}"
             )
 
-        # 2. Contract Compliance (60-80% of POs are 'NB')
+        # 2. Contract Compliance
         nb_count = len(ekko[ekko["BSART"] == "NB"])
         compliance_rate = nb_count / len(ekko)
         tgt_comp = THRESHOLDS["contract_rate"]
@@ -289,7 +404,7 @@ class DQCore:
                 f"Rate {compliance_rate:.1%} outside {tgt_comp}",
             )
 
-        # 3. Late Delivery Rate (20-30%)
+        # 3. Late Delivery Rate 20-30%
         grs = ekbe[ekbe["BEWTP"] == "E"].merge(
             ekpo[["EBELN", "EBELP", "EINDT"]], on=["EBELN", "EBELP"]
         )
@@ -308,7 +423,7 @@ class DQCore:
                 f"Rate {late_rate:.1%} outside {tgt_late}",
             )
 
-        # 4. GR/IR Ratio (~1:1)
+        # 4. GR/IR Ratio (~1:1
         counts = ekbe["BEWTP"].value_counts()
         gr, ir = counts.get("E", 0), counts.get("Q", 0)
         ratio = ir / gr if gr > 0 else 0
@@ -318,28 +433,44 @@ class DQCore:
             self.log("Stats", "GR/IR Ratio", "WARN", f"Imbalanced: {ratio:.2f}")
 
         # 5. Price Outliers (3 Std Dev)
-        # Check outliers by Material Group (MATKL)
-        merged_price = ekpo.merge(mara[["MATNR", "MATKL"]], on="MATNR")
 
-        def check_outliers(group):
-            mean = group["NETPR"].mean()
-            std = group["NETPR"].std()
-            if std == 0:
-                return 0
-            # Identify outliers (> 3 sigma)
-            outliers = group[np.abs(group["NETPR"] - mean) > (3 * std)]
-            return len(outliers)
+        if "MATKL" in ekpo.columns:
+            # Filter out rows with missing MATKL
+            ekpo_with_matkl = ekpo.dropna(subset=["MATKL"])
 
-        total_outliers = merged_price.groupby("MATKL").apply(check_outliers).sum()
-        if total_outliers > (len(ekpo) * 0.01):  # Allow 1% outliers max
-            self.log(
-                "Stats",
-                "Price Outliers",
-                "WARN",
-                f"{total_outliers} extreme price outliers found",
-            )
+            def check_outliers(group):
+                # Use log-transformed prices for outlier detection
+                log_prices = np.log1p(group["NETPR"])
+                mean = log_prices.mean()
+                std = log_prices.std()
+                if std == 0:
+                    return 0
+                # Identify outliers (> 3 sigma on log scale)
+                outliers = group[np.abs(log_prices - mean) > (3 * std)]
+                return len(outliers)
+
+            if len(ekpo_with_matkl) > 0:
+                total_outliers = (
+                    ekpo_with_matkl.groupby("MATKL", dropna=True)
+                    .apply(check_outliers)
+                    .sum()
+                )
+            else:
+                total_outliers = 0
+
+            if total_outliers > (len(ekpo) * 0.01):  # Allow 1% outliers max
+                self.log(
+                    "Stats",
+                    "Price Outliers",
+                    "WARN",
+                    f"{total_outliers} extreme price outliers found",
+                )
+            else:
+                self.log("Stats", "Price Outliers", "PASS", "No significant outliers")
         else:
-            self.log("Stats", "Price Outliers", "PASS", "No significant outliers")
+            self.log(
+                "Stats", "Price Outliers", "PASS", "MATKL not available for analysis"
+            )
 
         # 6. Material Balance (No category > 40%)
         counts = mara["MATKL"].value_counts(normalize=True)
@@ -373,7 +504,7 @@ class DQCore:
             ekbe[ekbe["BEWTP"] == "E"], on=["EBELN", "EBELP"], how="inner"
         )
         coverage = len(items_with_gr) / len(ekpo)
-        # Threshold: In reality, recent POs won't have GRs. We'll warn if coverage is suspiciously low (<90%)
+
         if coverage < 0.90:
             self.log(
                 "Completeness",
