@@ -173,8 +173,16 @@ class SAPDataGenerator:
         n = self.config.num_vendors
         num_top = int(n * self.config.pareto_split)
 
-        # pareto weights: top 20% get weight=100, rest get 1
-        spend_weight = np.where(np.arange(n) < num_top, 100, 1)
+        # pareto weights: top 20% get weight=4000, rest get 1 (achieves ~80% spend concentration)
+        split = self.config.pareto_split
+        share = self.config.pareto_spend_share
+
+        if split > 0 and share < 1.0:
+            top_weight = (share * (1 - split)) / (split * (1 - share))
+        else:
+            top_weight = 1.0
+
+        spend_weight = np.where(np.arange(n) < num_top, top_weight, 1)
 
         # KTOKK - Preferred Vendor Logic
         num_preferred = int(n * self.config.preferred_vendor_ratio)
@@ -206,10 +214,11 @@ class SAPDataGenerator:
         telf1 = np.array([fake.phone_number() for _ in range(n)])
         smtp_addr = np.array([fake.company_email() for _ in range(n)])
 
-        # Dates
         sim_start = pd.Timestamp(self.config.start_date)
-        erdat_end = sim_start - pd.Timedelta(days=1)
-        erdat_start = sim_start - pd.Timedelta(days=365 * 10)
+        erdat_end = sim_start
+        erdat_start = sim_start - pd.Timedelta(
+            days=365 * 5
+        )  # Max 5 years before sim start
         erdat = pd.to_datetime(
             np.random.choice(pd.date_range(erdat_start, erdat_end), size=n)
         )
@@ -300,10 +309,10 @@ class SAPDataGenerator:
             # desc
             batch_maktx = [f"{display_cat} - {fake.bs()}" for _ in range(count)]
 
-            # creation date, <=start of simulation
+            # creation date, <=start of simulation (max 5 years before)
             sim_start = pd.Timestamp(self.config.start_date)
-            ersda_end = sim_start - pd.Timedelta(days=1)
-            ersda_start = sim_start - pd.Timedelta(days=365 * 10)
+            ersda_end = sim_start
+            ersda_start = sim_start - pd.Timedelta(days=365 * 5)
             ersda_range = (ersda_end - ersda_start).days
             batch_ersda = [
                 ersda_start + pd.Timedelta(days=int(np.random.random() * ersda_range))
@@ -460,22 +469,26 @@ class SAPDataGenerator:
             vendor_meta["ERDAT"] < cutoff_date
         )  # shiftable (ERDAT < cutoff)
 
-        # shift dates back for shiftable POs to between ERDAT and cutoff
+        # shift dates back for shiftable POs to between ERDAT and cutoff (but not before sim start)
         if shiftable_mask.any():
+            sim_start = pd.Timestamp(self.config.start_date)
             erdat_vals = pd.DatetimeIndex(
                 vendor_meta.loc[shiftable_mask, "ERDAT"].values
             )
+            lower_bound = np.maximum(
+                erdat_vals, pd.DatetimeIndex([sim_start] * len(erdat_vals))
+            )
             days_range = (
-                pd.DatetimeIndex([cutoff_date] * len(erdat_vals)) - erdat_vals
+                pd.DatetimeIndex([cutoff_date] * len(lower_bound)) - lower_bound
             ).days.to_numpy()
 
             random_fractions = np.random.random(len(days_range))
             random_offsets: NDArray[np.int_] = (
                 random_fractions * np.maximum(days_range, 0)
             ).astype(int)
-            aedat[shiftable_mask] = (
-                erdat_vals + pd.to_timedelta(random_offsets, unit="D")
-            ).to_numpy()
+            aedat[shiftable_mask] = lower_bound + pd.to_timedelta(
+                random_offsets, unit="D"
+            )
 
         safe_vendors = self.lfa1[self.lfa1["SPERR"] == ""]["LIFNR"].to_numpy()
         lifnr[impossible_mask] = np.random.choice(
@@ -491,7 +504,7 @@ class SAPDataGenerator:
         )
         bsart = np.where(np.random.random(n) < nb_prob, "NB", "FO")
 
-        ebeln = np.array([f"PO{i:010d}" for i in range(1, n + 1)])
+        ebeln = np.array([f"PO{i:08d}" for i in range(1, n + 1)])
 
         bukrs = np.random.choice(self.config.company_codes, size=n)
         waers = np.random.choice(
@@ -545,6 +558,7 @@ class SAPDataGenerator:
 
         # material assignment
         items_df["MATNR"] = None
+        items_df["KONNR"] = None
 
         spot_mask = items_df["BSART"] == "FO"
         n_spot = spot_mask.sum()
@@ -578,6 +592,7 @@ class SAPDataGenerator:
                     "CONTRACT_PRICE",
                     "VALID_FROM",
                     "VALID_TO",
+                    "CONTRACT_ID",
                 ]
             ],
             left_on="AEDAT",
@@ -589,10 +604,11 @@ class SAPDataGenerator:
         valid_mask = selected["AEDAT"] <= selected["VALID_TO"]
         selected = selected.loc[valid_mask].copy()
 
-        # ipdate matched rows using index alignment
+        # update matched rows using index alignment
         if len(selected) > 0 and "MATNR" in selected.columns:
             items_df.loc[selected.index, "MATNR"] = selected["MATNR"]
             items_df.loc[selected.index, "CONTRACT_PRICE"] = selected["CONTRACT_PRICE"]
+            items_df.loc[selected.index, "KONNR"] = selected["CONTRACT_ID"]
 
         left_nans = items_df["MATNR"].isna()
         items_df.loc[left_nans, "MATNR"] = np.random.choice(
@@ -620,10 +636,12 @@ class SAPDataGenerator:
         spot_price = np.where(pref_mask, spot_price * pref_discount, spot_price)
 
         if "CONTRACT_PRICE" in items_df.columns:
-            items_df["NETPR"] = np.where(
-                items_df["CONTRACT_PRICE"].notna(),
-                items_df["CONTRACT_PRICE"],
-                spot_price,
+            has_contract_mask = items_df["CONTRACT_PRICE"].notna()
+            contract_variance = np.random.normal(1.0, 0.01, has_contract_mask.sum())
+
+            items_df["NETPR"] = spot_price  # Default to spot price
+            items_df.loc[has_contract_mask, "NETPR"] = (
+                items_df.loc[has_contract_mask, "CONTRACT_PRICE"] * contract_variance
             )
         else:
             items_df["NETPR"] = spot_price
@@ -679,6 +697,7 @@ class SAPDataGenerator:
                 "MATKL",
                 "MEINS",
                 "WERKS",
+                "KONNR",
             ]
         ]
 
@@ -703,7 +722,32 @@ class SAPDataGenerator:
         )
 
         # Delivery Dates
-        gr_df = base_df.copy()
+        # with Partial Deliveries (1-3 GRs per item)
+        # 1. Identify items to split (e.g., 20% of items)
+        n_total = len(base_df)
+        split_mask = np.random.random(n_total) < 0.20
+
+        # Non-split items (1 delivery)
+        df_single = base_df[~split_mask].copy()
+
+        # Split items (2 deliveries)
+        df_split = base_df[split_mask].copy()
+
+        # First delivery (40-60% of quantity)
+        df_part1 = df_split.copy()
+        ratio1 = np.random.uniform(0.4, 0.6, len(df_part1))
+        df_part1["MENGE"] = (df_part1["MENGE"] * ratio1).round(0)
+        df_part1["MENGE"] = np.maximum(df_part1["MENGE"], 1)  # Ensure at least 1
+        df_part1["NETWR"] = df_part1["MENGE"] * df_part1["NETPR"]
+
+        # Second delivery (Remainder)
+        df_part2 = df_split.copy()
+        df_part2["MENGE"] = df_split["MENGE"] - df_part1["MENGE"]
+        df_part2 = df_part2[df_part2["MENGE"] > 0]  # Drop if nothing left
+        df_part2["NETWR"] = df_part2["MENGE"] * df_part2["NETPR"]
+
+        # Combine all
+        gr_df = pd.concat([df_single, df_part1, df_part2], ignore_index=True)
         gr_df["BEWTP"] = "E"
         n_gr = len(gr_df)
 
@@ -781,7 +825,9 @@ class SAPDataGenerator:
             Any, pd.to_timedelta(processing_time, unit="D")  # type: ignore[reportUnknownMemberType]
         )
 
-        price_noise = np.random.normal(1.0, 0.02, len(ir_df))
+        noise_raw = np.random.normal(0, 0.01, len(ir_df))
+        noise_clipped = np.clip(noise_raw, -0.019, 0.019)  # Clip to 1.9%
+        price_noise = 1.0 + noise_clipped
         ir_df["DMBTR"] = ir_df["DMBTR"] * price_noise
         ir_df["DMBTR"] = ir_df["DMBTR"].round(2)
 
@@ -795,6 +841,16 @@ class SAPDataGenerator:
             [f"5{i:09d}" for i in range(1, len(self.ekbe) + 1)]
         )
 
+        # Order Accuracy: flag items with quantity/quality issues (8% error rate)
+        self.ekbe["HAS_ISSUE"] = np.random.choice(
+            [True, False], size=len(self.ekbe), p=[0.08, 0.92]
+        )
+
+        # Response Time: Days for vendor to respond to inquiries (1-7 days)
+        base_response = np.random.randint(1, 8, size=len(self.ekbe))
+        perf_adjustment = (self.ekbe["perf_bias"] * 2).astype(int)
+        self.ekbe["RESPONSE_DAYS"] = np.clip(base_response + perf_adjustment, 1, 10)
+
         self.ekbe = self.ekbe[
             [
                 "EBELN",
@@ -805,6 +861,8 @@ class SAPDataGenerator:
                 "DMBTR",
                 "BELNR",
                 "ACTUAL_DELIVERY_DATE",
+                "HAS_ISSUE",
+                "RESPONSE_DAYS",
             ]
         ].reset_index(drop=True)
 
@@ -894,9 +952,14 @@ class SAPDataGenerator:
         print(f"\nDelivery Performance: {late_pct:.1f}% Late Deliveries")
 
         # 4. Top 5 Vendors
-        top_vendors = merged.groupby("LIFNR")["NETWR"].sum().nlargest(5)
+        vendor_spend = (
+            self.ekpo.merge(self.ekko[["EBELN", "LIFNR"]], on="EBELN")
+            .groupby("LIFNR")["NETWR"]
+            .sum()
+            .nlargest(5)
+        )
         print("\nTop 5 Vendors by Spend:")
-        top_vendors = top_vendors.reset_index().merge(
+        top_vendors = vendor_spend.reset_index().merge(
             self.lfa1[["LIFNR", "NAME1"]], on="LIFNR"
         )
         for _, row in top_vendors.iterrows():
