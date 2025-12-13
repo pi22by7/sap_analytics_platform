@@ -129,6 +129,23 @@ class DQCore:
                         examples=bad_iso[col].head(3).tolist(),
                     )
 
+            # 4. Date Type Validation
+            date_cols = [
+                c
+                for c in rules["required"]
+                if any(x in c for x in ["DAT", "TIME", "VALID_"])
+            ]
+            for col in date_cols:
+                if col in df.columns:
+                    if not pd.api.types.is_datetime64_any_dtype(df[col]):
+                        self.log(
+                            "Schema",
+                            f"{table}.{col} Type",
+                            "FAIL",
+                            f"Not a valid datetime (Found: {df[col].dtype})",
+                            severity="Warning",
+                        )
+
     def run_integrity_checks(self):
         """Validates Foreign Keys."""
 
@@ -234,7 +251,7 @@ class DQCore:
         # Amount (2% tolerance)
         diff_amt = np.abs(matched["DMBTR_GR"] - matched["DMBTR_INV"])
         tol = matched["DMBTR_GR"] * THRESHOLDS["invoice_amt_tol"]
-        # Allow small rounding errors (e.g. 0.01)
+        #  a llow small rounding errors (e.g. 0.01)
         bad_amts = matched[(diff_amt > tol) & (diff_amt > 0.01)]
 
         if not bad_amts.empty:
@@ -486,7 +503,6 @@ class DQCore:
             self.log("Completeness", "Material Balance", "PASS", "Balanced")
 
         # 7. Completeness Checks
-        # "Every PO has at least 1 line item"
         empty_pos = ekko[~ekko["EBELN"].isin(ekpo["EBELN"])]
         if not empty_pos.empty:
             self.log(
@@ -499,26 +515,28 @@ class DQCore:
         else:
             self.log("Completeness", "Empty POs", "PASS", "Valid")
 
-        # "Every PO line item has at least 1 goods receipt"
         items_with_gr = ekpo.merge(
             ekbe[ekbe["BEWTP"] == "E"], on=["EBELN", "EBELP"], how="inner"
         )
+        items_with_gr = items_with_gr[["EBELN", "EBELP"]].drop_duplicates()
+
         coverage = len(items_with_gr) / len(ekpo)
 
-        if coverage < 0.90:
+        if coverage < 1.0:
+            missing_gr = len(ekpo) - len(items_with_gr)
             self.log(
                 "Completeness",
                 "GR Coverage",
-                "WARN",
-                f"Only {coverage:.1%} items have GR",
-                severity="Warning",
+                "FAIL",
+                f"Missing GR for {missing_gr} items ({coverage:.1%})",
+                severity="Critical",
             )
         else:
             self.log(
-                "Completeness", "GR Coverage", "PASS", f"Good coverage: {coverage:.1%}"
+                "Completeness", "GR Coverage", "PASS", f"Full coverage: {coverage:.1%}"
             )
 
-        # "Date ranges correct (2020-2024)"
+        # Date ranges correct (2020-2024)
         min_date = pd.to_datetime(ekko["AEDAT"]).min()
         max_date = pd.to_datetime(ekko["AEDAT"]).max()
         if min_date.year >= 2020 and max_date.year <= 2024:
