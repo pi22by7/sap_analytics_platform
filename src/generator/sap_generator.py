@@ -993,7 +993,7 @@ if __name__ == "__main__":
         num_vendors=1000,
         num_materials=5000,
         num_pos=10000,  # 10k Headers -> ~40k Items -> ~60k History
-        num_contracts=2000000,  # 2k Contracts
+        num_contracts=2000,
     )
 
     generator = SAPDataGenerator(config)

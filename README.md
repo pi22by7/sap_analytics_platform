@@ -67,6 +67,12 @@ python src/generator/sap_generator.py
 streamlit run src/dashboard/app.py
 ```
 
+### Generate Executive Report (Bonus)
+
+```bash
+python generate_report.py
+```
+
 ### Run Quality Checks
 
 ```bash

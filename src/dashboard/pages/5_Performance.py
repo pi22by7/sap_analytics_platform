@@ -1,151 +1,119 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
+from utils import get_data
 
-st.set_page_config(page_title="Performance Dashboard", layout="wide")
+st.set_page_config(page_title="Performance", layout="wide")
+data = get_data()
 
-if "data" not in st.session_state:
-    st.stop()
+st.title("Performance Dashboard")
 
-data = st.session_state["data"]
 df_ekbe = data["ekbe"]
 df_ekpo = data["ekpo"]
-df_lfa1 = data["lfa1"]
-df_ekko = data["ekko"]
 
-st.title("🚀 Performance Dashboard")
-
-# data prep
 gr_df = df_ekbe[df_ekbe["BEWTP"] == "E"].merge(
-    df_ekpo[["EBELN", "EBELP", "EINDT", "LIFNR", "MATNR"]], on=["EBELN", "EBELP"]
+    df_ekpo[["EBELN", "EBELP", "EINDT"]], on=["EBELN", "EBELP"]
 )
 
-# Calculate Delay (Days)
-# Posting Date - Delivery Deadline
 gr_df["delay_days"] = (gr_df["BUDAT"] - gr_df["EINDT"]).dt.days
 gr_df["is_late"] = gr_df["delay_days"] > 0
 
+# --- KPIs ---
 total_deliveries = len(gr_df)
-late_deliveries = gr_df["is_late"].sum()
-global_otd = 100 - (late_deliveries / total_deliveries * 100)
-avg_delay = gr_df[gr_df["is_late"]]["delay_days"].mean()  # avg of late items
+late_count = gr_df["is_late"].sum()
+otd_rate = (1 - (late_count / total_deliveries)) * 100 if total_deliveries > 0 else 0
+avg_delay = gr_df[gr_df["is_late"]]["delay_days"].mean()
 
-# --- KPI ROW ---
 col1, col2, col3 = st.columns(3)
+col1.metric("Global OTD Rate", f"{otd_rate:.1f}%", help="Target: 95%")
+col2.metric("Late Deliveries", f"{late_count}")
+col3.metric("Avg Delay (When Late)", f"{avg_delay:.1f} Days")
 
-with col1:
-    # Gauge Chart for OTD
-    fig_gauge = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=global_otd,
-            title={"text": "Global On-Time Delivery %"},
-            gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": "#2ecc71" if global_otd > 90 else "#f1c40f"},
-                "threshold": {
-                    "line": {"color": "red", "width": 4},
-                    "thickness": 0.75,
-                    "value": 90,
-                },
-            },
-        )
-    )
-    fig_gauge.update_layout(height=250, margin={"t": 0, "b": 0, "l": 0, "r": 0})
-    st.plotly_chart(fig_gauge, use_container_width=True)
+st.markdown("---")
 
-with col2:
-    st.metric("Total Deliveries Tracked", f"{total_deliveries:,}")
-    st.metric(
-        "Late Deliveries",
-        f"{late_deliveries:,}",
-        delta="-High Risk" if late_deliveries > 0 else "Good",
-        delta_color="inverse",
-    )
+# --- TREND ---
+st.subheader("OTD Trend (Monthly)")
 
-with col3:
-    st.metric("Avg Delay (When Late)", f"{avg_delay:.1f} Days")
-    st.caption("Average slippage on missed deadlines")
+gr_df["month"] = gr_df["BUDAT"].dt.to_period("M").astype(str)
+trend = gr_df.groupby("month")["is_late"].mean().reset_index()
+trend["otd_rate"] = (1 - trend["is_late"]) * 100
 
-st.divider()
-
-# --- VENDOR PERFORMANCE RANKING ---
-c1, c2 = st.columns([1, 1])
-
-with c1:
-    st.subheader("Worst Performing Vendors (Bottom 10)")
-
-    vendor_perf = (
-        gr_df.groupby("LIFNR").agg({"is_late": ["count", "sum"]}).reset_index()
-    )
-    vendor_perf.columns = ["LIFNR", "total_txns", "late_txns"]
-
-    # filter to rule out noise
-    vendor_perf = vendor_perf[vendor_perf["total_txns"] > 5]
-
-    vendor_perf["otd_pct"] = 100 - (
-        vendor_perf["late_txns"] / vendor_perf["total_txns"] * 100
-    )
-
-    # get Name
-    vendor_perf = vendor_perf.merge(df_lfa1[["LIFNR", "NAME1"]], on="LIFNR")
-
-    bottom_10 = vendor_perf.sort_values("otd_pct", ascending=True).head(10)
-
-    fig_bar = px.bar(
-        bottom_10,
-        x="otd_pct",
-        y="NAME1",
-        orientation="h",
-        title="Lowest OTD % (Vendors > 5 Orders)",
-        labels={"otd_pct": "On-Time %", "NAME1": "Vendor"},
-        color="otd_pct",
-        color_continuous_scale="RdYlGn",
-    )
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-with c2:
-    st.subheader("Late Deliveries Distribution")
-    late_only = gr_df[gr_df["is_late"]]
-    fig_hist = px.histogram(
-        late_only,
-        x="delay_days",
-        nbins=20,
-        title="How late are the late orders?",
-        labels={"delay_days": "Days Overdue"},
-    )
-    st.plotly_chart(fig_hist, use_container_width=True)
-
-# --- PERFORMANCE HEATMAP ---
-st.subheader("Vendor Performance Heatmap (Last 12 Months)")
-st.caption(
-    "Visualizing OTD% trends. Red cells indicate months with poor delivery performance."
+fig = px.line(
+    trend,
+    x="month",
+    y="otd_rate",
+    markers=True,
+    title="On-Time Delivery % by Month",
+    labels={"month": "Month", "otd_rate": "On-Time Rate (%)"},
 )
+# Add target line (95%)
+fig.add_hline(y=95, line_dash="dash", line_color="green", annotation_text="Target")
+fig.update_yaxes(range=[0, 105])
+st.plotly_chart(fig, use_container_width=True)
 
-# prep: only top 20 vendors for readablity
-top_vendors = df_ekpo.groupby("LIFNR")["NETWR"].sum().nlargest(20).index
-heatmap_data = gr_df[gr_df["LIFNR"].isin(top_vendors)].copy()
+# --- REASONS ---
+st.subheader("Late Delivery Analysis")
+st.caption("Categorization of late deliveries based on delay duration.")
 
-heatmap_data["month"] = heatmap_data["BUDAT"].dt.to_period("M").astype(str)
+late_df = gr_df[gr_df["is_late"]].copy()
 
-heatmap_agg = (
-    heatmap_data.groupby(["LIFNR", "month"])
-    .agg({"is_late": lambda x: 100 - (x.sum() / len(x) * 100)})
+
+def get_reason(days):
+    if days <= 3:
+        return "Minor Logistics Delay"
+    if days <= 7:
+        return "Production Delay"
+    if days <= 14:
+        return "Material Shortage"
+    return "Major Disruption"
+
+
+late_df["reason"] = late_df["delay_days"].apply(get_reason)
+reason_counts = late_df["reason"].value_counts().reset_index()
+reason_counts.columns = ["Reason", "Count"]
+
+c1, c2 = st.columns(2)
+with c1:
+    fig = px.pie(
+        reason_counts,
+        values="Count",
+        names="Reason",
+        title="Late Reasons Distribution",
+        hole=0.4,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+with c2:
+    st.dataframe(
+        reason_counts,
+        use_container_width=True,
+        column_config={"Reason": "Delay Category", "Count": "Frequency"},
+    )
+
+# --- VENDOR RANKING ---
+st.subheader("Vendor Reliability Issues")
+st.caption("Vendors with the highest late delivery rates (minimum 5 orders)")
+
+vendor_stats = (
+    gr_df.groupby("LIFNR")
+    .agg(total=("EBELN", "count"), late=("is_late", "sum"))
     .reset_index()
 )
-heatmap_agg.columns = ["LIFNR", "month", "otd_pct"]
 
-heatmap_agg = heatmap_agg.merge(df_lfa1[["LIFNR", "NAME1"]], on="LIFNR")
+vendor_stats = vendor_stats[vendor_stats["total"] >= 5]
+vendor_stats["late_pct"] = (vendor_stats["late"] / vendor_stats["total"]) * 100
 
-fig_heat = px.density_heatmap(
-    heatmap_agg,
-    x="month",
+worst_vendors = vendor_stats.sort_values("late_pct", ascending=False).head(10)
+worst_vendors = worst_vendors.merge(data["lfa1"][["LIFNR", "NAME1"]], on="LIFNR")
+
+fig = px.bar(
+    worst_vendors,
+    x="late_pct",
     y="NAME1",
-    z="otd_pct",
-    histfunc="avg",
-    color_continuous_scale="RdYlGn",
-    range_color=[50, 100],  # <50 is very red
-    title="OTD % by Vendor and Month",
+    orientation="h",
+    title="Highest Late Delivery %",
+    labels={"late_pct": "Late %", "NAME1": "Vendor"},
+    color="late_pct",
+    color_continuous_scale="Reds",
 )
-st.plotly_chart(fig_heat, use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)

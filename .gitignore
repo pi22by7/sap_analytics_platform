@@ -155,3 +155,6 @@ data/generated/
 *.xlsx
 
 reports/
+*.parquet
+*.pdf
+*.txt

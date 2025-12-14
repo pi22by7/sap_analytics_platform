@@ -1,122 +1,132 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
+from utils import get_data
 
 st.set_page_config(page_title="Vendor Intelligence", layout="wide")
-
-if "data" not in st.session_state:
-    st.warning("Data not loaded. Run app.py")
-    st.stop()
-
-data = st.session_state["data"]
-df_lfa1 = data["lfa1"]
-df_ekko = data["ekko"]
-df_ekpo = data["ekpo"]
-df_ekbe = data["ekbe"]
+data = get_data()
 
 st.title("Vendor Intelligence")
 
-# SIDEBAR FILTERS
+# --- FILTERS ---
 st.sidebar.header("Filter Vendors")
-selected_country = st.sidebar.multiselect(
-    "Country", options=df_lfa1["LAND1"].unique(), default=df_lfa1["LAND1"].unique()[:3]
+
+df_lfa1 = data["lfa1"]
+all_countries = sorted(df_lfa1["LAND1"].unique())
+sel_countries = st.sidebar.multiselect(
+    "Country", all_countries, default=all_countries[:3]
 )
-selected_type = st.sidebar.multiselect(
-    "Vendor Type", options=df_lfa1["KTOKK"].unique(), default=df_lfa1["KTOKK"].unique()
+
+vendors_filtered = df_lfa1[df_lfa1["LAND1"].isin(sel_countries)]
+valid_vendors = vendors_filtered["LIFNR"].unique()
+
+# --- PREPARE METRICS ---
+df_ekpo = data["ekpo"]
+df_ekko = data["ekko"]
+
+mask_vendor = df_ekko["LIFNR"].isin(valid_vendors)
+filtered_ekko = df_ekko[mask_vendor]
+
+vendor_spend = (
+    df_ekpo[df_ekpo["EBELN"].isin(filtered_ekko["EBELN"])]
+    .groupby("LIFNR")["NETWR"]
+    .sum()
+    .reset_index()
 )
 
-filtered_vendors = df_lfa1[
-    (df_lfa1["LAND1"].isin(selected_country)) & (df_lfa1["KTOKK"].isin(selected_type))
-]
-
-# Search Panel
-vendor_list = filtered_vendors["LIFNR"] + " - " + filtered_vendors["NAME1"]
-selected_vendor_str = st.selectbox(
-    "🔍 Search & Select Vendor to Analyze:", options=vendor_list
+df_ekbe = data["ekbe"]
+gr_df = df_ekbe[df_ekbe["BEWTP"] == "E"].merge(
+    df_ekpo[["EBELN", "EBELP", "EINDT"]], on=["EBELN", "EBELP"]
 )
-selected_lifnr = selected_vendor_str.split(" - ")[0]
+gr_df["is_late"] = gr_df["BUDAT"] > gr_df["EINDT"]
 
-# data prep for selected vendor
-# filter vendor
-vendor_pos = df_ekko[df_ekko["LIFNR"] == selected_lifnr]
-vendor_items = df_ekpo[df_ekpo["EBELN"].isin(vendor_pos["EBELN"])]
+vendor_perf = (
+    gr_df.groupby("LIFNR")
+    .agg(total_deliveries=("EBELN", "count"), late_deliveries=("is_late", "sum"))
+    .reset_index()
+)
 
-# vendor metrics
-total_spend = vendor_items["NETWR"].sum()
-po_count = len(vendor_pos)
-avg_order_val = total_spend / po_count if po_count > 0 else 0
+vendor_perf["otd_rate"] = (
+    1 - (vendor_perf["late_deliveries"] / vendor_perf["total_deliveries"])
+) * 100
 
-# vendor on-time delivery calculation
-vendor_gr = df_ekbe[
-    (df_ekbe["EBELN"].isin(vendor_pos["EBELN"])) & (df_ekbe["BEWTP"] == "E")
-].merge(vendor_items[["EBELN", "EBELP", "EINDT"]], on=["EBELN", "EBELP"])
+summary = vendors_filtered.merge(vendor_spend, on="LIFNR", how="left")
+summary = summary.merge(vendor_perf, on="LIFNR", how="left")
+summary["NETWR"] = summary["NETWR"].fillna(0)
+summary["otd_rate"] = summary["otd_rate"].fillna(100)
 
-if not vendor_gr.empty:
-    on_time_pct = (vendor_gr["BUDAT"] <= vendor_gr["EINDT"]).mean() * 100
-else:
-    on_time_pct = 0.0
+# --- MAIN SCATTER PLOT ---
+st.subheader("Vendor Performance Matrix")
+st.caption(
+    "Scatter plot analyzing Spend (Y-axis) versus On-Time Delivery Performance (X-axis). "
+    "Strategic quadrant analysis aids in identifying high-risk, high-spend suppliers."
+)
 
-# --- UI LAYOUT ---
+fig = px.scatter(
+    summary,
+    x="otd_rate",
+    y="NETWR",
+    size="NETWR",
+    hover_name="NAME1",
+    title="Vendor Matrix: Spend vs. Performance",
+    labels={"otd_rate": "On-Time Delivery (%)", "NETWR": "Total Spend ($)"},
+    color="NETWR",
+    color_continuous_scale="Viridis",
+)
 
-# 1. Vendor Profile
-st.markdown("### 🏢 Vendor Profile")
-col1, col2, col3, col4 = st.columns(4)
+fig.add_vline(
+    x=90, line_dash="dash", line_color="green", annotation_text="Target (90%)"
+)
+fig.add_hline(
+    y=summary["NETWR"].mean(),
+    line_dash="dash",
+    line_color="grey",
+    annotation_text="Avg Spend",
+)
+fig.update_layout(yaxis_tickprefix="$")
+st.plotly_chart(fig, use_container_width=True)
 
-v_details = df_lfa1[df_lfa1["LIFNR"] == selected_lifnr].iloc[0]
+# --- DRILL DOWN ---
+st.markdown("---")
+st.subheader("Detailed Vendor Profile")
 
-with col1:
-    st.caption("Location")
-    st.write(f"{v_details['ORT01']}, {v_details['LAND1']}")
-with col2:
-    st.metric("Total Spend", f"${total_spend:,.0f}")
-with col3:
-    st.metric("Total POs", f"{po_count}")
-with col4:
-    color = "normal"
-    if on_time_pct < 80:
-        color = "inverse"
-    st.metric("On-Time Delivery", f"{on_time_pct:.1f}%", delta_color=color)
 
-st.divider()
+def fmt_func(lifnr):
+    name = df_lfa1[df_lfa1["LIFNR"] == lifnr]["NAME1"].iloc[0]
+    return f"{lifnr} - {name}"
 
-# 2. spend trend and risk matrix
-c1, c2 = st.columns([2, 1])
 
-with c1:
-    st.subheader("Spend Trend")
-    if not vendor_pos.empty:
-        trend_df = vendor_items.merge(vendor_pos[["EBELN", "AEDAT"]], on="EBELN")
-        trend_df["month"] = trend_df["AEDAT"].dt.to_period("M").astype(str)
-        monthly = trend_df.groupby("month")["NETWR"].sum().reset_index()
+available_vendors = summary[summary["NETWR"] > 0]["LIFNR"].unique()
 
-        fig = px.area(monthly, x="month", y="NETWR", title="Monthly Spend Volume")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No transaction history.")
+if len(available_vendors) > 0:
+    sel_lifnr = st.selectbox(
+        "Select Vendor for Analysis", available_vendors, format_func=fmt_func
+    )
 
-with c2:
-    st.subheader("Risk Matrix")
-    risk_score = 100 - on_time_pct
-    st.write(f"Risk Score: **{risk_score:.1f}/100**")
-    st.progress(risk_score / 100)
-    if v_details["SPERR"] == "X":
-        st.error("⚠️ VENDOR BLOCKED")
-    else:
-        st.success("✅ Active Status")
+    v_stats = summary[summary["LIFNR"] == sel_lifnr].iloc[0]
 
-# 3. top materials
-st.subheader("Top Supplied Materials")
-if not vendor_items.empty:
-    top_mats = vendor_items.groupby("MATNR")["NETWR"].sum().reset_index()
-    top_mats = top_mats.merge(data["mara"][["MATNR", "MAKTX"]], on="MATNR")
-    top_mats = top_mats.sort_values("NETWR", ascending=False).head(10)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Spend", f"${v_stats['NETWR']:,.2f}")
+    c2.metric("On-Time Rate", f"{v_stats['otd_rate']:.1f}%")
+    c3.metric("Deliveries Tracked", f"{v_stats['total_deliveries']:.0f}")
+
+    st.markdown("#### Top Supplied Materials")
+    v_pos = df_ekpo[
+        df_ekpo["EBELN"].isin(
+            filtered_ekko[filtered_ekko["LIFNR"] == sel_lifnr]["EBELN"]
+        )
+    ]
+    top_mats = v_pos.groupby("MATNR")["NETWR"].sum().nlargest(5).reset_index()
+    top_mats = top_mats.merge(data["mara"], on="MATNR")
 
     st.dataframe(
-        top_mats,
-        column_config={
-            "NETWR": st.column_config.NumberColumn("Spend", format="$%.2f"),
-            "MAKTX": "Material Name",
-        },
+        top_mats[["MATNR", "MAKTX", "NETWR"]].style.format({"NETWR": "${:,.2f}"}),
         use_container_width=True,
-        hide_index=True,
+        column_config={
+            "MATNR": "Material ID",
+            "MAKTX": "Material Description",
+            "NETWR": "Spend",
+        },
     )
+
+else:
+    st.info("No active vendors found matching the current filters.")

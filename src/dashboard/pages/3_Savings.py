@@ -1,116 +1,116 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
+import pandas as pd
+from utils import get_data
 
-st.set_page_config(page_title="Savings Opportunities", layout="wide")
+st.set_page_config(page_title="Savings", layout="wide")
+data = get_data()
 
-if "data" not in st.session_state:
-    st.stop()
+st.title("Savings Opportunities")
 
-data = st.session_state["data"]
 df_ekpo = data["ekpo"]
 df_ekko = data["ekko"]
-df_mara = data["mara"]
+merged = df_ekpo.merge(df_ekko[["EBELN", "BSART", "LIFNR"]], on="EBELN")
 
-st.title("💰 Savings & Opportunities")
+# --- 1. MAVERICK SPEND ---
+maverick_mask = merged["BSART"] == "FO"  # Assumption: 10% savings
+maverick_total = merged[maverick_mask]["NETWR"].sum()
+sav_maverick = maverick_total * 0.10
 
-# --- CALCULATIONS ---
-
-merged = df_ekpo.merge(df_ekko[["EBELN", "BSART", "AEDAT"]], on="EBELN")
-
-# 2. Maverick Spend
-maverick_mask = merged["BSART"] == "FO"
-maverick_spend = merged[maverick_mask]["NETWR"].sum()
-maverick_count = maverick_mask.sum()
-
-# 3. Price Variance Analysis - average because we dropped base_price
-avg_prices = (
-    df_ekpo.groupby("MATNR")["NETPR"].mean().reset_index(name="avg_market_price")
-)
+# --- 2. PRICE VARIANCE ---
+avg_prices = df_ekpo.groupby("MATNR")["NETPR"].mean().reset_index(name="avg_price")
 variance_df = merged.merge(avg_prices, on="MATNR")
 
-variance_df["variance_per_unit"] = (
-    variance_df["NETPR"] - variance_df["avg_market_price"]
+variance_df["overspend"] = (
+    variance_df["NETPR"] - variance_df["avg_price"]
+) * variance_df["MENGE"]
+
+
+sav_variance = variance_df[variance_df["overspend"] > 0]["overspend"].sum()
+
+# --- 3. CONSOLIDATION ---
+# If we buy a material from >3 vendors, we're diluting our buying power.
+# Assumption: $5k savings in admin/bulk discounts per consolidated material.
+vendor_counts = merged.groupby("MATNR")["LIFNR"].nunique()
+candidates = vendor_counts[vendor_counts > 3]
+sav_consolidation = len(candidates) * 5000
+
+# --- SUMMARY CHART ---
+st.subheader("Total Savings Potential")
+
+savings_df = pd.DataFrame(
+    {
+        "Category": ["Maverick Spend", "Price Variance", "Consolidation"],
+        "Amount": [sav_maverick, sav_variance, sav_consolidation],
+    }
 )
-variance_df["potential_savings"] = (
-    variance_df["variance_per_unit"] * variance_df["MENGE"]
-)
 
-savings_opps = variance_df[variance_df["potential_savings"] > 0]
-total_variance_savings = savings_opps["potential_savings"].sum()
+c1, c2 = st.columns([1, 2])
 
-total_savings = maverick_spend * 0.10 + total_variance_savings
+with c1:
+    st.metric("Total Identified Savings", f"${savings_df['Amount'].sum():,.2f}")
+    st.dataframe(
+        savings_df.style.format({"Amount": "${:,.2f}"}),
+        use_container_width=True,
+        column_config={"Category": "Opportunity Type", "Amount": "Estimated Savings"},
+    )
 
-# --- UI LAYOUT ---
-
-# 1. Opportunity Cards
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric("Total Savings Potential", f"${total_savings:,.2f}", "Estimated")
-    st.caption("Combined impact of variance reduction & maverick control")
-
-with col2:
-    st.metric("Maverick Spend Volume", f"${maverick_spend:,.2f}")
-    st.caption(f"{maverick_count} transactions off-contract")
-
-with col3:
-    st.metric("Price Variance Opportunity", f"${total_variance_savings:,.2f}")
-    st.caption("Savings from normalizing prices to average")
+with c2:
+    fig = px.bar(
+        savings_df,
+        x="Category",
+        y="Amount",
+        color="Category",
+        title="Savings Breakdown",
+        labels={"Amount": "Potential Savings ($)"},
+    )
+    fig.update_layout(yaxis_tickprefix="$", showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
 
-# 2. Opportunity Breakdown
-c1, c2 = st.columns(2)
+# --- DETAILS TABLES ---
+st.subheader("Actionable Insights")
 
-with c1:
-    st.subheader("Maverick Spend by Category")
-    mav_cat = merged[maverick_mask].merge(df_mara[["MATNR", "MATKL"]], on="MATNR")
-    mav_agg = mav_cat.groupby("MATKL")["NETWR"].sum().reset_index()
+tab1, tab2 = st.tabs(["High Variance Materials", "Consolidation Candidates"])
 
-    fig_mav = px.bar(
-        mav_agg,
-        x="NETWR",
-        y="MATKL",
-        orientation="h",
-        title="Off-Contract Spend by Category",
-        labels={"NETWR": "Spend ($)", "MATKL": "Category"},
+with tab1:
+    st.markdown(
+        "**Materials with significant price instability (Purchased above Avg Price)**"
     )
-    st.plotly_chart(fig_mav, use_container_width=True)
 
-with c2:
-    st.subheader("Price Variance Distribution")
-    fig_hist = px.histogram(
-        savings_opps,
-        x="potential_savings",
-        nbins=30,
-        title="Distribution of Overpayment Events",
-        labels={"potential_savings": "Potential Savings ($)"},
+    top_var = (
+        variance_df[variance_df["overspend"] > 0]
+        .groupby("MATNR")["overspend"]
+        .sum()
+        .nlargest(10)
+        .reset_index()
     )
-    st.plotly_chart(fig_hist, use_container_width=True)
+    top_var = top_var.merge(data["mara"][["MATNR", "MAKTX"]], on="MATNR")
+    st.dataframe(
+        top_var.style.format({"overspend": "${:,.2f}"}),
+        use_container_width=True,
+        column_config={
+            "MATNR": "Material ID",
+            "MAKTX": "Description",
+            "overspend": "Total Variance (Overspend)",
+        },
+    )
 
-# 3. Detailed Action Table
-st.subheader("Top Savings Opportunities")
-top_savings = (
-    savings_opps.groupby("MATNR")
-    .agg({"potential_savings": "sum", "NETWR": "sum", "MENGE": "sum"})
-    .reset_index()
-)
-
-top_savings = top_savings.merge(df_mara[["MATNR", "MAKTX"]], on="MATNR")
-top_savings = top_savings.sort_values("potential_savings", ascending=False).head(15)
-
-st.dataframe(
-    top_savings[["MATNR", "MAKTX", "potential_savings", "NETWR"]],
-    column_config={
-        "potential_savings": st.column_config.ProgressColumn(
-            "Savings Potential",
-            format="$%.2f",
-            min_value=0,
-            max_value=top_savings["potential_savings"].max(),
-        ),
-        "NETWR": st.column_config.NumberColumn("Total Spend", format="$%.2f"),
-    },
-    use_container_width=True,
-    hide_index=True,
-)
+with tab2:
+    st.markdown("**Materials sourced from fragmented supplier base (>3 Vendors)**")
+    cons_df = (
+        candidates.reset_index(name="vendor_count")
+        .sort_values("vendor_count", ascending=False)
+        .head(10)
+    )
+    cons_df = cons_df.merge(data["mara"][["MATNR", "MAKTX"]], on="MATNR")
+    st.dataframe(
+        cons_df,
+        use_container_width=True,
+        column_config={
+            "MATNR": "Material ID",
+            "MAKTX": "Description",
+            "vendor_count": "Active Vendors",
+        },
+    )
