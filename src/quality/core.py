@@ -470,7 +470,7 @@ class DQCore:
             if len(ekpo_with_matkl) > 0:
                 total_outliers = (
                     ekpo_with_matkl.groupby("MATKL", dropna=True)
-                    .apply(check_outliers)
+                    .apply(check_outliers, include_groups=False)
                     .sum()
                 )
             else:

@@ -13,7 +13,7 @@ A high-performance SAP Procurement Analytics Platform built from the ground up. 
 
 ## Technology Stack
 
-- **Core:** Python 3.8+, Pandas, NumPy, Faker
+- **Core:** Python 3.10+, Pandas, NumPy, Faker
 - **Visualization:** Streamlit, Plotly
 - **Reporting:** ReportLab
 - **Quality & Testing:** Pytest, Black
@@ -26,6 +26,12 @@ The platform operates on a modular pipeline:
 2.  **Quality (`src/quality`):** Validates data against defined business constraints.
 3.  **Dashboard (`src/dashboard`):** Consumes processed data to render real-time insights.
 4.  **Reporting:** Generates static PDF executive summaries.
+
+## Performance
+
+As a reference point, a benchmark on a consumer-grade laptop (15GB RAM, Arch Linux) generated 50M contracts, 100k vendors, 500k materials, and 1M purchase orders in about 103 seconds, without multithreading or batch processing. This serves as an indicative baseline for the current implementation and helps inform future scaling and optimization work.
+
+![Benchmark – 20M Record Generation](./benchmark_generation_20m_records.png)
 
 ## Setup Instructions
 
@@ -100,9 +106,10 @@ The analytics engine demonstrates the platform's ability to uncover critical pro
 
 ## Future Improvements
 
-- **Tera-Scale Architecture ("Entity Partitioning"):** To achieve infinite scaling (e.g., 100M+ contracts), the generation engine should be refactored to use a **Vendor Partition Loop**. By keeping only global Materials (MARA) in memory and iterating through Vendors one-by-one (generating and flushing their specific Contracts and POs to disk immediately), we can bypass the memory ceiling imposed by the `VENDOR_CONTRACTS` table while maintaining perfect referential integrity.
-- **Distributed Analytics Layer:** As the dataset grows to terabytes, single-node Pandas processing becomes a bottleneck. Migrating the analytics backend to **Dask** or **Polars** (leveraging lazy evaluation and out-of-core processing) would allow the dashboard to query massive datasets interactively without requiring terabytes of RAM.
-- **Orchestration:** While the current script runs linearly, a production environment would require an orchestrator like **Airflow** or **Prefect**. This would manage the dependency graph (Generator -> Quality Checks -> Analytics Cache) and allow for failure recovery at the task level rather than re-running the entire pipeline. Which is fine for smaller data (up to a few GBs), but as soon as we are conducting big data scale generation, orchestration becomes necessary.
+- **Entity-Partitioned Generation (Vendor Loop):** For data volumes that exceed comfortable in-memory limits, the generator can be refactored to an entity-partitioned design. Global reference data such as Materials (MARA) would be generated once and kept in memory, while Vendors are processed in partitions; for each vendor batch, the pipeline would generate that vendor's master data, contracts, and full PO/receipt history and then flush the results to disk. This reduces peak memory usage from the `VENDOR_CONTRACTS` table while preserving referential integrity and realistic global spend distributions.
+- **Scaling Vectorized Logic with Transaction Batching:** The current vectorized approach is optimized for the target challenge scale, but the same logic can be wrapped in a batch loop for high-volume transaction tables (EKKO/EKPO/EKBE). In contrast to the vendor-partitioned design above, this keeps all master data (including contracts) in memory as a broadcast-style lookup and only batches transaction rows to disk, which is suitable while the contracts table still fits comfortably in RAM.
+- **Distributed Analytics Layer:** As datasets grow beyond what is practical on a single machine, migrating the analytics backend to **Dask** or **Polars** (with lazy and out-of-core execution) would allow the dashboard and quality checks to operate on much larger Parquet collections while keeping memory usage bounded.
+- **Orchestration:** For production use, an orchestrator such as **Airflow** or **Prefect** could manage the end-to-end pipeline (Generator → Quality Checks → Analytics Cache/Reports), handle retries, and coordinate partitioned generation. This becomes particularly valuable once generation and analytics are spread across multiple batches, partitions, or worker nodes.
 
 ## Author
 
