@@ -1,3 +1,11 @@
+"""
+SAP Data Generator module.
+
+This module contains the SAPDataGenerator class responsible for generating
+realistic SAP procurement data (LFA1, MARA, EKKO, EKPO, EKBE, VENDOR_CONTRACTS)
+based on a configurable set of business rules and distributions.
+"""
+
 import pandas as pd
 import numpy as np
 from numpy.typing import NDArray
