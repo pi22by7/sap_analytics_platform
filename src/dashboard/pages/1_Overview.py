@@ -62,15 +62,17 @@ with c1:
         labels={"month": "Month", "NETWR": "Spend Amount ($)"},
     )
     fig.update_layout(yaxis_tickprefix="$")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 with c2:
     st.subheader("Spend by Category")
-    cat_df = spend_df.merge(data["mara"][["MATNR", "MATKL"]], on="MATNR")
+    cat_df = spend_df.drop(columns=["MATKL"], errors="ignore").merge(
+        data["mara"][["MATNR", "MATKL"]], on="MATNR"
+    )
     cat_spend = cat_df.groupby("MATKL")["NETWR"].sum().reset_index()
 
     fig = px.pie(cat_spend, values="NETWR", names="MATKL", hole=0.4)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # --- SAVINGS ESTIMATES ---
 
@@ -100,7 +102,7 @@ fig = px.bar(
     labels={"Potential Savings": "Estimated Savings ($)"},
 )
 fig.update_layout(yaxis_tickprefix="$", showlegend=False)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # --- TOP VENDORS ---
 st.subheader("Top 5 Vendors by Spend")
@@ -109,7 +111,7 @@ top_vendors = top_vendors.merge(data["lfa1"][["LIFNR", "NAME1"]], on="LIFNR")
 
 st.dataframe(
     top_vendors[["LIFNR", "NAME1", "NETWR"]].style.format({"NETWR": "${:,.2f}"}),
-    use_container_width=True,
+    width="stretch",
     column_config={
         "LIFNR": "Vendor ID",
         "NAME1": "Vendor Name",

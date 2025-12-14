@@ -147,6 +147,20 @@ class DQCore:
                             severity="Warning",
                         )
 
+            if table == "EKBE" and "ACTUAL_DELIVERY_DATE" in df.columns:
+                invalid_gr = df[
+                    (df["BEWTP"] == "E") & (df["ACTUAL_DELIVERY_DATE"].isnull())
+                ]
+                if not invalid_gr.empty:
+                    self.log(
+                        "Schema",
+                        "EKBE.ACTUAL_DELIVERY_DATE Completeness",
+                        "FAIL",
+                        f"{len(invalid_gr)} GRs missing Actual Delivery Date",
+                        examples=invalid_gr.index.tolist()[:3],
+                        severity="Critical",
+                    )
+
     def run_integrity_checks(self):
         """Validates Foreign Keys."""
 
@@ -234,20 +248,29 @@ class DQCore:
             )
 
         # 4. Invoice Logic (Amounts & Dates)
-        # Handle multiple GRs/IRs per item by  matching
+        # Handle multiple GRs/IRs per item by matching
         grs = ekbe[ekbe["BEWTP"] == "E"].copy()
         invs = ekbe[ekbe["BEWTP"] == "Q"].copy()
 
-        grs = grs.sort_values(["EBELN", "EBELP", "BUDAT", "BELNR"])
-        invs = invs.sort_values(["EBELN", "EBELP", "BUDAT", "BELNR"])
+        if "PAIR_ID" in ekbe.columns:
+            # Robust matching using generated linkage ID
+            matched = pd.merge(
+                grs,
+                invs,
+                on=["EBELN", "EBELP", "PAIR_ID"],
+                suffixes=("_GR", "_INV"),
+            )
+        else:
+            # Fallback: Sort by Date and Sequence (Best Guess)
+            grs = grs.sort_values(["EBELN", "EBELP", "BUDAT", "BELNR"])
+            invs = invs.sort_values(["EBELN", "EBELP", "BUDAT", "BELNR"])
 
-        grs["seq"] = grs.groupby(["EBELN", "EBELP"]).cumcount()
-        invs["seq"] = invs.groupby(["EBELN", "EBELP"]).cumcount()
+            grs["seq"] = grs.groupby(["EBELN", "EBELP"]).cumcount()
+            invs["seq"] = invs.groupby(["EBELN", "EBELP"]).cumcount()
 
-        # Merge on Item + Sequence
-        matched = pd.merge(
-            grs, invs, on=["EBELN", "EBELP", "seq"], suffixes=("_GR", "_INV")
-        )
+            matched = pd.merge(
+                grs, invs, on=["EBELN", "EBELP", "seq"], suffixes=("_GR", "_INV")
+            )
 
         # Amount (2% tolerance)
         diff_amt = np.abs(matched["DMBTR_GR"] - matched["DMBTR_INV"])

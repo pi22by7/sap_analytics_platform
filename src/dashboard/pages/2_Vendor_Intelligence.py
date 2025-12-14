@@ -27,7 +27,7 @@ mask_vendor = df_ekko["LIFNR"].isin(valid_vendors)
 filtered_ekko = df_ekko[mask_vendor]
 
 vendor_spend = (
-    df_ekpo[df_ekpo["EBELN"].isin(filtered_ekko["EBELN"])]
+    df_ekpo.merge(filtered_ekko[["EBELN", "LIFNR"]], on="EBELN")
     .groupby("LIFNR")["NETWR"]
     .sum()
     .reset_index()
@@ -40,7 +40,8 @@ gr_df = df_ekbe[df_ekbe["BEWTP"] == "E"].merge(
 gr_df["is_late"] = gr_df["BUDAT"] > gr_df["EINDT"]
 
 vendor_perf = (
-    gr_df.groupby("LIFNR")
+    gr_df.merge(df_ekko[["EBELN", "LIFNR"]], on="EBELN")
+    .groupby("LIFNR")
     .agg(total_deliveries=("EBELN", "count"), late_deliveries=("is_late", "sum"))
     .reset_index()
 )
@@ -83,7 +84,7 @@ fig.add_hline(
     annotation_text="Avg Spend",
 )
 fig.update_layout(yaxis_tickprefix="$")
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # --- DRILL DOWN ---
 st.markdown("---")
@@ -120,7 +121,7 @@ if len(available_vendors) > 0:
 
     st.dataframe(
         top_mats[["MATNR", "MAKTX", "NETWR"]].style.format({"NETWR": "${:,.2f}"}),
-        use_container_width=True,
+        width="stretch",
         column_config={
             "MATNR": "Material ID",
             "MAKTX": "Material Description",

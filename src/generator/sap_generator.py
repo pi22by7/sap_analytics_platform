@@ -831,6 +831,10 @@ class SAPDataGenerator:
         gr_df["BUDAT"] = gr_df["ACTUAL_DELIVERY_DATE"]
 
         gr_df.rename(columns={"NETWR": "DMBTR"}, inplace=True)
+        gr_df["DMBTR"] = gr_df["DMBTR"].round(2)
+
+        # Add PAIR_ID
+        gr_df["PAIR_ID"] = range(1, len(gr_df) + 1)
 
         # Invoice Receipt
         has_invoice = np.random.random(len(gr_df)) < self.config.invoice_generation_rate
@@ -846,7 +850,7 @@ class SAPDataGenerator:
         )
 
         noise_raw = np.random.normal(0, 0.01, len(ir_df))
-        noise_clipped = np.clip(noise_raw, -0.019, 0.019)  # Clip to 1.9%
+        noise_clipped = np.clip(noise_raw, -0.01, 0.01)  # Clip to 1% to be safe
         price_noise = 1.0 + noise_clipped
         ir_df["DMBTR"] = ir_df["DMBTR"] * price_noise
         ir_df["DMBTR"] = ir_df["DMBTR"].round(2)
@@ -883,6 +887,7 @@ class SAPDataGenerator:
                 "ACTUAL_DELIVERY_DATE",
                 "HAS_ISSUE",
                 "RESPONSE_DAYS",
+                "PAIR_ID",
             ]
         ].reset_index(drop=True)
 

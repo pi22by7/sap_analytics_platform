@@ -50,7 +50,7 @@ fig = px.line(
 # Add target line (95%)
 fig.add_hline(y=95, line_dash="dash", line_color="green", annotation_text="Target")
 fig.update_yaxes(range=[0, 105])
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 
 # --- REASONS ---
 st.subheader("Late Delivery Analysis")
@@ -82,11 +82,11 @@ with c1:
         title="Late Reasons Distribution",
         hole=0.4,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 with c2:
     st.dataframe(
         reason_counts,
-        use_container_width=True,
+        width='stretch',
         column_config={"Reason": "Delay Category", "Count": "Frequency"},
     )
 
@@ -94,8 +94,11 @@ with c2:
 st.subheader("Vendor Reliability Issues")
 st.caption("Vendors with the highest late delivery rates (minimum 5 orders)")
 
+# Merge LIFNR from EKKO for vendor stats
+vendor_stats_df = gr_df.merge(data["ekko"][["EBELN", "LIFNR"]], on="EBELN")
+
 vendor_stats = (
-    gr_df.groupby("LIFNR")
+    vendor_stats_df.groupby("LIFNR")
     .agg(total=("EBELN", "count"), late=("is_late", "sum"))
     .reset_index()
 )
@@ -116,4 +119,4 @@ fig = px.bar(
     color="late_pct",
     color_continuous_scale="Reds",
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')

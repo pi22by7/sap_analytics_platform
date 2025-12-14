@@ -73,7 +73,6 @@ SCHEMA_RULES = {
             "BUDAT",
             "MENGE",
             "BELNR",
-            "ACTUAL_DELIVERY_DATE",
         ],
         "constraints": {"EBELN": 10},
     },

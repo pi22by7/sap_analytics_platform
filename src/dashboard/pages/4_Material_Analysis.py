@@ -11,7 +11,9 @@ df_mara = data["mara"]
 df_ekpo = data["ekpo"]
 df_ekko = data["ekko"]
 
-merged = df_ekpo.merge(df_ekko[["EBELN", "AEDAT"]], on="EBELN")
+merged = df_ekpo.drop(columns=["MATKL"], errors="ignore").merge(
+    df_ekko[["EBELN", "AEDAT"]], on="EBELN"
+)
 merged = merged.merge(df_mara[["MATNR", "MATKL", "MAKTX"]], on="MATNR")
 
 # --- CATEGORY OVERVIEW ---
@@ -30,11 +32,11 @@ with c1:
         labels={"MATKL": "Material Group", "NETWR": "Total Spend ($)"},
     )
     fig.update_layout(yaxis_tickprefix="$")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 with c2:
     st.dataframe(
         cat_summary.style.format({"NETWR": "${:,.2f}"}),
-        use_container_width=True,
+        width='stretch',
         column_config={"MATKL": "Category", "NETWR": "Spend Amount"},
     )
 
@@ -83,7 +85,7 @@ if not mat_txns.empty:
         labels={"AEDAT": "Date", "NETPR": "Unit Price ($)"},
     )
     fig.update_layout(yaxis_tickprefix="$")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 else:
     st.info("No transactions found for this material.")
