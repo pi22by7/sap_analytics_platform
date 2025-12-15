@@ -157,4 +157,5 @@ data/generated/
 reports/
 *.parquet
 *.pdf
-*.txt
+
+temp/*

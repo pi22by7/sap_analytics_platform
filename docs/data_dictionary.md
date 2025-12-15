@@ -63,6 +63,7 @@ Contains line item data for POs.
 | `EINDT` | Item Delivery Date | Date | 2024-02-15 |
 | `WERKS` | Plant | String (4) | 1000 |
 | `MATKL` | Material Group | String | ELECT |
+| `KONNR` | Contract Number (FK) | String (10) | C00000001 |
 
 ## EKBE - Purchasing History
 Contains history of Goods Receipts (GR) and Invoice Receipts (IR).
@@ -77,6 +78,9 @@ Contains history of Goods Receipts (GR) and Invoice Receipts (IR).
 | `DMBTR` | Amount in Local Currency | Decimal | 5000.00 |
 | `BELNR` | Number of Material Document | String (10) | 500000001 |
 | `ACTUAL_DELIVERY_DATE` | Actual Date of Delivery | Date | 2024-02-16 |
+| `HAS_ISSUE` | Quality/Quantity Issue Flag | Boolean | True/False |
+| `RESPONSE_DAYS` | Vendor Response Time (Days) | Integer | 5 |
+| `PAIR_ID` | Internal Mapping ID for GR/IR Pairs | Integer | 12345 |
 
 ## VENDOR_CONTRACTS - Custom Table
 Tracks long-term purchasing agreements.

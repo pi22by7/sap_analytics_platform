@@ -13,7 +13,7 @@ df_ekko = data["ekko"]
 merged = df_ekpo.merge(df_ekko[["EBELN", "BSART", "LIFNR"]], on="EBELN")
 
 # --- 1. MAVERICK SPEND ---
-maverick_mask = merged["BSART"] == "FO"  # Assumption: 10% savings
+maverick_mask = merged["BSART"] != "NB"  # Assumption: 10% savings
 maverick_total = merged[maverick_mask]["NETWR"].sum()
 sav_maverick = maverick_total * 0.10
 

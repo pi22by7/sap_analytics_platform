@@ -79,7 +79,7 @@ with c2:
 st.subheader("Estimated Savings Opportunities")
 
 # 1. Maverick Spend: FO Orders
-maverick_spend = spend_df[spend_df["BSART"] == "FO"]["NETWR"].sum()
+maverick_spend = spend_df[spend_df["BSART"] != "NB"]["NETWR"].sum()
 sav_maverick = maverick_spend * 0.10  # Assumption
 
 # 2. Consolidation: Materials > 3 vendors
