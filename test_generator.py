@@ -1,7 +1,9 @@
+from typing import Any, cast
+
 import numpy as np
 import pandas as pd
-from typing import cast, Any
-from src.generator.sap_generator import SAPDataGenerator, GeneratorConfig
+
+from src.generator.sap_generator import GeneratorConfig, SAPDataGenerator
 
 config = GeneratorConfig(seed=42, num_vendors=1000, num_materials=5000, num_pos=10000)
 

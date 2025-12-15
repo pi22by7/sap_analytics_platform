@@ -1,6 +1,6 @@
-import streamlit as st
-import plotly.express as px
 import pandas as pd
+import plotly.express as px
+import streamlit as st
 from utils import get_data
 
 st.set_page_config(page_title="Savings", layout="wide")
@@ -51,7 +51,7 @@ with c1:
     st.metric("Total Identified Savings", f"${savings_df['Amount'].sum():,.2f}")
     st.dataframe(
         savings_df.style.format({"Amount": "${:,.2f}"}),
-        width='stretch',
+        width="stretch",
         column_config={"Category": "Opportunity Type", "Amount": "Estimated Savings"},
     )
 
@@ -65,7 +65,7 @@ with c2:
         labels={"Amount": "Potential Savings ($)"},
     )
     fig.update_layout(yaxis_tickprefix="$", showlegend=False)
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width="stretch")
 
 st.markdown("---")
 
@@ -89,7 +89,7 @@ with tab1:
     top_var = top_var.merge(data["mara"][["MATNR", "MAKTX"]], on="MATNR")
     st.dataframe(
         top_var.style.format({"overspend": "${:,.2f}"}),
-        width='stretch',
+        width="stretch",
         column_config={
             "MATNR": "Material ID",
             "MAKTX": "Description",
@@ -107,7 +107,7 @@ with tab2:
     cons_df = cons_df.merge(data["mara"][["MATNR", "MAKTX"]], on="MATNR")
     st.dataframe(
         cons_df,
-        width='stretch',
+        width="stretch",
         column_config={
             "MATNR": "Material ID",
             "MAKTX": "Description",

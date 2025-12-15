@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 
 
 def get_data():
@@ -7,7 +6,8 @@ def get_data():
     Retrieves data from session state and applies global date filtering.
 
     Returns:
-        dict: A dictionary of DataFrames, where 'ekko' is filtered by the selected date range.
+        dict: A dictionary of DataFrames,
+            where 'ekko' is filtered by the selected date range.
     """
     if "data" not in st.session_state:
         st.warning("Data not found. Please run the main application first.")

@@ -2,6 +2,8 @@
 Reporting and Visualization utilities.
 """
 
+# flake8: noqa: E501
+
 import json
 from pathlib import Path
 

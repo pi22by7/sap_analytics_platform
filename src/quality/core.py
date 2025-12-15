@@ -3,9 +3,11 @@ Core Data Quality Engine.
 Executes all validation rules defined in requirements.
 """
 
-import pandas as pd
-import numpy as np
 from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
 from src.quality.config import REQUIRED_TABLES, SCHEMA_RULES, THRESHOLDS
 from src.quality.utils import generate_html_report
 

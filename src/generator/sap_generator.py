@@ -6,12 +6,13 @@ realistic SAP procurement data (LFA1, MARA, EKKO, EKPO, EKBE, VENDOR_CONTRACTS)
 based on a configurable set of business rules and distributions.
 """
 
-import pandas as pd
-import numpy as np
-from numpy.typing import NDArray
 from dataclasses import dataclass, field
-from typing import Optional, TypedDict, List, Tuple, Any, cast, Dict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
+
+import numpy as np
+import pandas as pd
 from faker import Faker
+from numpy.typing import NDArray
 
 fake = Faker()
 
@@ -91,7 +92,8 @@ class GeneratorConfig:
     # Order Management
     large_order_prob: float = 0.05
     large_order_threshold: int = 50000  # Value threshold for large orders
-    large_order_value_range: Tuple[int, int] = (15000, 50000)  # Target value range
+    large_order_value_range: Tuple[int, int] = (15000, 50000)
+    # Target value range
 
     # PO Line Item Distribution
     po_item_dist_params: Tuple[float, float] = (1.2, 0.5)  # Log-normal (mu, sigma)
@@ -181,7 +183,8 @@ class SAPDataGenerator:
         n = self.config.num_vendors
         num_top = int(n * self.config.pareto_split)
 
-        # pareto weights: top 20% get weight=4000, rest get 1 (achieves ~80% spend concentration)
+        # pareto weights: top 20% get weight=4000,
+        # rest get 1 (achieves ~80% spend concentration)
         split = self.config.pareto_split
         share = self.config.pareto_spend_share
 
@@ -489,7 +492,8 @@ class SAPDataGenerator:
             vendor_meta["ERDAT"] < cutoff_date
         )  # shiftable (ERDAT < cutoff)
 
-        # shift dates back for shiftable POs to between ERDAT and cutoff (but not before sim start)
+        # shift dates back for shiftable POs to between ERDAT and cutoff
+        # (but not before sim start)
         if shiftable_mask.any():
             sim_start = pd.Timestamp(self.config.start_date)
             erdat_vals = pd.DatetimeIndex(
@@ -846,7 +850,7 @@ class SAPDataGenerator:
         min_inv, max_inv = self.config.invoice_processing_range
         processing_time = np.random.randint(min_inv, max_inv, size=len(ir_df))
         ir_df["BUDAT"] = ir_df["BUDAT"] + cast(
-            Any, pd.to_timedelta(processing_time, unit="D")  # type: ignore[reportUnknownMemberType]
+            Any, pd.to_timedelta(processing_time, unit="D")
         )
 
         noise_raw = np.random.normal(0, 0.01, len(ir_df))

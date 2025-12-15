@@ -1,11 +1,12 @@
-import streamlit as st
 import sys
 from pathlib import Path
+
+import streamlit as st
 
 # Add root to path so we can import the report generator eventually
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
-from pdf_report import generate_executive_report
+from pdf_report import generate_executive_report  # noqa: E402
 
 st.set_page_config(page_title="Report Generator")
 

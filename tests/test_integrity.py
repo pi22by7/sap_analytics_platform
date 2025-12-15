@@ -1,6 +1,3 @@
-import pytest
-
-
 def test_foreign_keys_exist(loaded_data):
     """Ensure all transactional keys exist in master data."""
     lfa1_ids = set(loaded_data["LFA1"]["LIFNR"])

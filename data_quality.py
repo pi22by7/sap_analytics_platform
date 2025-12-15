@@ -7,11 +7,12 @@ import sys
 import os
 
 # Ensure we can import from src
-sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 
-from quality.core import DQCore
 
 if __name__ == "__main__":
+    sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+    from quality.core import DQCore
+
     print("🔌 Initializing Data Quality Framework...")
     core = DQCore(data_path="data")
     success = core.run()

@@ -1,9 +1,10 @@
-import pandas as pd
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.append("src/dashboard")
-from pdf_report import generate_executive_report
+from pdf_report import generate_executive_report  # noqa: E402
 
 
 def load_data():

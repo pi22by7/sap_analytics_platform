@@ -1,5 +1,5 @@
-import streamlit as st
 import plotly.express as px
+import streamlit as st
 from utils import get_data
 
 st.set_page_config(page_title="Vendor Intelligence", layout="wide")
@@ -87,8 +87,9 @@ summary["avg_lead_time"] = summary["avg_lead_time"].fillna(0)
 # --- MAIN SCATTER PLOT ---
 st.subheader("Vendor Performance Matrix")
 st.caption(
-    "Scatter plot analyzing Spend (Y-axis) versus On-Time Delivery Performance (X-axis). "
-    "Strategic quadrant analysis aids in identifying high-risk, high-spend suppliers."
+    "Scatter plot analyzing Spend (Y-axis) versus On-Time Delivery Performance "
+    "(X-axis). Strategic quadrant analysis aids in identifying high-risk, "
+    "high-spend suppliers."
 )
 
 fig = px.scatter(

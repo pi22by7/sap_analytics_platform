@@ -1,6 +1,6 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 
 def test_pareto_distribution(loaded_data):
@@ -62,7 +62,8 @@ def test_invoice_amounts_match(loaded_data):
     ir_counts = ekbe[ekbe["BEWTP"] == "Q"].groupby(["EBELN", "EBELP"]).size()
 
     # Align and find items where counts match exactly
-    # ignoring pending invoices since generator doesn't link, and does not need to link IRs to GRs 1:1
+    # ignoring pending invoices since generator doesn't link,
+    # and does not need to link IRs to GRs 1:1
     aligned_gr_c, aligned_ir_c = gr_counts.align(ir_counts, join="inner")
     fully_matched_items = aligned_gr_c[aligned_gr_c == aligned_ir_c].index
 
@@ -91,7 +92,7 @@ def test_invoice_amounts_match(loaded_data):
     tolerance = aligned_gr * 0.025
 
     # Filter only where diff > tolerance AND diff > 0.05
-    violations = diff[(diff > tolerance) & (diff > 0.05)]
+    violations = diff[(diff > tolerance) & (diff > 0.05)]  # noqa: E501
     assert len(violations) == 0, f"Found {len(violations)} mismatched invoice amounts"
 
 

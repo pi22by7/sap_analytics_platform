@@ -1,7 +1,5 @@
-import streamlit as st
 import plotly.express as px
-import pandas as pd
-import numpy as np
+import streamlit as st
 from utils import get_data
 
 st.set_page_config(page_title="Performance", layout="wide")
@@ -50,7 +48,7 @@ fig = px.line(
 # Add target line (95%)
 fig.add_hline(y=95, line_dash="dash", line_color="green", annotation_text="Target")
 fig.update_yaxes(range=[0, 105])
-st.plotly_chart(fig, width='stretch')
+st.plotly_chart(fig, width="stretch")
 
 # --- REASONS ---
 st.subheader("Late Delivery Analysis")
@@ -82,11 +80,11 @@ with c1:
         title="Late Reasons Distribution",
         hole=0.4,
     )
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width="stretch")
 with c2:
     st.dataframe(
         reason_counts,
-        width='stretch',
+        width="stretch",
         column_config={"Reason": "Delay Category", "Count": "Frequency"},
     )
 
@@ -119,4 +117,4 @@ fig = px.bar(
     color="late_pct",
     color_continuous_scale="Reds",
 )
-st.plotly_chart(fig, width='stretch')
+st.plotly_chart(fig, width="stretch")

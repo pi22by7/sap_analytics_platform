@@ -1,5 +1,5 @@
-import streamlit as st
 import plotly.express as px
+import streamlit as st
 from utils import get_data
 
 st.set_page_config(page_title="Material Analysis", layout="wide")
@@ -32,11 +32,11 @@ with c1:
         labels={"MATKL": "Material Group", "NETWR": "Total Spend ($)"},
     )
     fig.update_layout(yaxis_tickprefix="$")
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width="stretch")
 with c2:
     st.dataframe(
         cat_summary.style.format({"NETWR": "${:,.2f}"}),
-        width='stretch',
+        width="stretch",
         column_config={"MATKL": "Category", "NETWR": "Spend Amount"},
     )
 
@@ -85,7 +85,7 @@ if not mat_txns.empty:
         labels={"AEDAT": "Date", "NETPR": "Unit Price ($)"},
     )
     fig.update_layout(yaxis_tickprefix="$")
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width="stretch")
 
 else:
     st.info("No transactions found for this material.")

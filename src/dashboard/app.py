@@ -1,7 +1,6 @@
+import pandas as pd
 import streamlit as st
 from data_loader import load_data
-import pandas as pd
-from datetime import datetime
 
 st.set_page_config(page_title="Procurement Analytics", page_icon="📊", layout="wide")
 
@@ -40,6 +39,7 @@ else:
 
 st.title("SAP Procurement Analytics Platform")
 st.markdown("Select a module from the sidebar to begin.")
-st.info(
-    f"📅 Viewing data from {st.session_state['date_filter']['start'].strftime('%Y-%m-%d')} to {st.session_state['date_filter']['end'].strftime('%Y-%m-%d')}"
-)
+
+start_date = st.session_state["date_filter"]["start"].strftime("%Y-%m-%d")
+end_date = st.session_state["date_filter"]["end"].strftime("%Y-%m-%d")
+st.info(f"📅 Viewing data from {start_date} to {end_date}")

@@ -1,9 +1,9 @@
+from datetime import datetime
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
-import pandas as pd
-from datetime import datetime
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 def generate_executive_report(data, output_path):
@@ -112,23 +112,28 @@ def generate_executive_report(data, output_path):
     recs = []
     if otd_rate < 95:
         recs.append(
-            "<b>Logistics Optimization:</b> OTD is below the 95% target. Initiate root cause analysis with bottom-quartile performers."
+            "<b>Logistics Optimization:</b> OTD is below the 95% target. "
+            "Initiate root cause analysis with bottom-quartile performers."
         )
     if compliance < 70:
         recs.append(
-            "<b>Spend Consolidation:</b> Contract compliance is below 70%. Enforce 'No PO, No Pay' policies to reduce maverick spend."
+            "<b>Spend Consolidation:</b> Contract compliance is below 70%. "
+            "Enforce 'No PO, No Pay' policies to reduce maverick spend."
         )
 
     # Check for maverick spend magnitude
     maverick = ekko[ekko["BSART"] == "FO"]
     if not maverick.empty:
         recs.append(
-            f"<b>Maverick Spend Control:</b> Identified {len(maverick)} off-contract orders. Transition top 20% of these commodities to framework agreements."
+            f"<b>Maverick Spend Control:</b> Identified {len(maverick)} "
+            "off-contract orders. Transition top 20% of these commodities "
+            "to framework agreements."
         )
 
     if not recs:
         recs.append(
-            "Operations are performing within target parameters. Maintain current monitoring cadence."
+            "Operations are performing within target parameters. "
+            "Maintain current monitoring cadence."
         )
 
     for r in recs:
